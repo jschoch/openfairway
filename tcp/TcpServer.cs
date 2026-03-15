@@ -30,8 +30,11 @@ public partial class TcpServer : Node
     private const double SHOT_COOLDOWN_MS = 500.0;
     private ulong _lastShotTimeMs;
 
-    // M2: Connection idle timeout (milliseconds)
-    private const double CONNECTION_TIMEOUT_MS = 60000.0;
+    // M2: Connection idle timeout (milliseconds).
+    // Set high enough for a real range session — golfers routinely take several
+    // minutes between shots.  Genuine disconnections are detected via Status.None
+    // regardless of this timer, so there is no risk of zombie sockets on localhost.
+    private const double CONNECTION_TIMEOUT_MS = 600000.0; // 10 minutes
     private ulong _lastActivityTimeMs;
 
     [Export] public int Port { get; set; } = 55000;
