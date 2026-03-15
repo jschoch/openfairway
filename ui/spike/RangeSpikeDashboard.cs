@@ -48,6 +48,7 @@ public partial class RangeSpikeDashboard : Control
     // Shot navigation
     private RangeSpikeShotSet _focusedSet;
     private int _focusedTraceIndex = -1;
+    private bool _displayLastShot;
 
     public override void _Ready()
     {
@@ -203,7 +204,7 @@ public partial class RangeSpikeDashboard : Control
         _engineOption = new OptionButton();
         _engineOption.AddItem("OpenFairway", 0);
         _engineOption.AddItem("libgolf (ref)", 1);
-        _engineOption.AddItem("Both", 2);
+        _engineOption.AddItem("All", 2);
         _engineOption.Select(0);
         _controlsFlow.AddChild(_engineOption);
 
@@ -217,6 +218,10 @@ public partial class RangeSpikeDashboard : Control
             _visibilityDialog.PopupCentered();
         };
         _controlsFlow.AddChild(tilesButton);
+
+        var displayLastShotCb = new CheckBox { Text = "Last Shot Only" };
+        displayLastShotCb.Toggled += pressed => { _displayLastShot = pressed; RefreshPlots(); };
+        _controlsFlow.AddChild(displayLastShotCb);
 
         Button statsButton = new() { Text = "Stats" };
         statsButton.Pressed += () =>
@@ -357,6 +362,7 @@ public partial class RangeSpikeDashboard : Control
     private void OnTcpHitBall(Godot.Collections.Dictionary data)
     {
         var (speed, vla, hla, backspin, sidespin) = _simulator.ExtractTcpParams(data);
+        float lmCarry = data.TryGetValue("CarryDistance", out var cd) ? cd.AsSingle() : 0f;
         int engineId = _engineOption.GetItemId(_engineOption.Selected);
         _liveShotCounter++;
 
@@ -368,6 +374,7 @@ public partial class RangeSpikeDashboard : Control
             var trace = _simulator.GenerateShotTraceFromParams(
                 set.Label, set.Traces.Count + 1, "LM", TcpTraceColor,
                 speed, vla, hla, backspin, sidespin);
+            trace.LmCarryDistanceYd = lmCarry;
             trace.DisplayColor = HitShotColorOF;
             set.Traces.Add(trace);
             SetFocusedSet(set);
@@ -521,12 +528,33 @@ public partial class RangeSpikeDashboard : Control
         RefreshPlots();
     }
 
+    // Returns either all shots or only the focused/last trace per set,
+    // depending on the "Last Shot Only" checkbox.
+    private List<RangeSpikeShotSet> GetDisplaySets()
+    {
+        if (!_displayLastShot) return _shotSets;
+
+        var result = new List<RangeSpikeShotSet>();
+        foreach (var set in _shotSets)
+        {
+            if (set.Traces.Count == 0) continue;
+            int idx = (set == _focusedSet)
+                ? Mathf.Clamp(_focusedTraceIndex, 0, set.Traces.Count - 1)
+                : set.Traces.Count - 1;
+            result.Add(new RangeSpikeShotSet(set.Label, set.Preset,
+                new List<RangeSpikeShotTrace> { set.Traces[idx] }));
+        }
+        return result;
+    }
+
     private void RefreshPlots()
     {
-        _viewport3D.SetShotSets(_shotSets);
-        _topDownPlot.SetShotSets(_shotSets);
-        _sidePlot.SetShotSets(_shotSets);
-        _distributionPlot.SetShotSets(_shotSets);
+        var display = GetDisplaySets();
+        _viewport3D.SetShotSets(display);
+        _topDownPlot.SetShotSets(display);
+        _sidePlot.SetShotSets(display);
+        _distributionPlot.SetShotSets(display);
+        // Stat panel always aggregates the full set for meaningful averages.
         _statPanel.SetShotSets(_shotSets);
         _setSummary.Text = _simulator.BuildSummary(_shotSets);
     }

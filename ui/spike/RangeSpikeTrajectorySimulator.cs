@@ -29,6 +29,8 @@ public sealed class RangeSpikeShotTrace
     public float DirectionDeg { get; set; }      // HLA
     public float BackspinRpm { get; set; }
     public float SidespinRpm { get; set; }
+    // Launch-monitor reported carry distance (yards). 0 if not from a real LM.
+    public float LmCarryDistanceYd { get; set; }
 }
 
 public sealed class RangeSpikeShotSet
