@@ -10,6 +10,8 @@ public partial class TcpServer : Node
     private readonly TcpServerPeer _tcpServer = new();
     private TcpClientPeer _tcpConnection;
     private bool _tcpConnected;
+    // Accumulates partial TCP data across frames; cleared after a successful parse.
+    private readonly StringBuilder _receiveBuffer = new();
     private string _tcpString = string.Empty;
     private Dictionary _shotData = new();
     private GlobalSettings _globalSettings;
@@ -113,25 +115,41 @@ public partial class TcpServer : Node
 
         _lastActivityTimeMs = Time.GetTicksMsec();
 
-        // C1: Reject oversized payloads
-        if (bytesAvailable > MAX_PAYLOAD_BYTES)
+        // C1: Reject oversized payloads — drain without blocking to keep _Process alive.
+        if (_receiveBuffer.Length + bytesAvailable > MAX_PAYLOAD_BYTES)
         {
-            PhysicsLogger.Error($"TCP payload too large ({bytesAvailable} bytes > {MAX_PAYLOAD_BYTES}), rejecting");
-            // Drain the oversized data to clear the buffer
-            _tcpConnection.GetUtf8String(bytesAvailable);
+            PhysicsLogger.Error($"TCP receive buffer too large (>{MAX_PAYLOAD_BYTES} bytes), resetting");
+            _receiveBuffer.Clear();
+            // Non-blocking drain: read what's there and discard.
+            _tcpConnection.GetPartialData(bytesAvailable);
             RespondError(501, "Payload too large");
             return;
         }
 
-        _tcpString = _tcpConnection.GetUtf8String(bytesAvailable);
-
-        var json = new Json();
-        var parseResult = json.Parse(_tcpString);
-        if (parseResult != Error.Ok)
+        // Non-blocking read — may return fewer bytes than requested if the
+        // message is still arriving across multiple TCP segments.
+        var readResult = _tcpConnection.GetPartialData(bytesAvailable);
+        if (readResult[0].As<Error>() != Error.Ok)
         {
-            RespondError(501, "Bad JSON data");
+            HandleDisconnected("TCP read error");
             return;
         }
+
+        byte[] chunk = readResult[1].AsByteArray();
+        if (chunk.Length == 0)
+            return;
+
+        _receiveBuffer.Append(Encoding.UTF8.GetString(chunk));
+
+        // Try to parse the accumulated buffer as a complete JSON object.
+        // If the message is still fragmenting across frames, parsing fails
+        // silently and we wait for more data on the next _Process tick.
+        _tcpString = _receiveBuffer.ToString();
+        var json = new Json();
+        if (json.Parse(_tcpString) != Error.Ok)
+            return; // incomplete — keep accumulating
+
+        _receiveBuffer.Clear();
 
         var data = json.GetData();
         if (data.VariantType != Variant.Type.Dictionary)
@@ -269,6 +287,7 @@ public partial class TcpServer : Node
         _tcpConnected = false;
         _shotData.Clear();
         _tcpString = string.Empty;
+        _receiveBuffer.Clear();
         ClearIdentifiedDevice();
         PublishConnectionStatus(false, string.Empty);
 
@@ -290,6 +309,7 @@ public partial class TcpServer : Node
         _tcpConnected = false;
         _shotData.Clear();
         _tcpString = string.Empty;
+        _receiveBuffer.Clear();
         ClearIdentifiedDevice();
         PublishConnectionStatus(false, string.Empty);
     }
