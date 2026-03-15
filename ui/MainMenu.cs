@@ -5,6 +5,7 @@ public partial class MainMenu : Control
     private const string LoadingScenePath = "res://ui/loading_screen.tscn";
     private const string CoursesScenePath = "res://courses/airways_fresno/hole_1/hole_1.tscn";
     private const string RangeScenePath = "res://courses/range.tscn";
+    private const string RangeSpikeScenePath = "res://ui/spike/range_spike_start.tscn";
     private const string TcpServerServicePath = "/root/TcpServerService";
     private const string VersionSettingPath = "application/config/version";
     private const string VersionFallback = "dev";
@@ -12,6 +13,7 @@ public partial class MainMenu : Control
     private Button _settingsButton;
     private Button _exitButton;
     private Button _rangeButton;
+    private Button _rangeSpikeButton;
     private Button _coursesButton;
     private SettingsPanel _settingsPanel;
     private TcpServer _tcpServer;
@@ -24,6 +26,7 @@ public partial class MainMenu : Control
         _settingsButton = GetNode<Button>("TopBanner/LeftButtons/SettingsButton");
         _exitButton = GetNode<Button>("TopBanner/LeftButtons/ExitButton");
         _rangeButton = GetNode<Button>("TilesRow/RangeTile/RangeButton");
+        _rangeSpikeButton = GetNode<Button>("TilesRow/RangeSpikeTile/RangeSpikeButton");
         _coursesButton = GetNode<Button>("TilesRow/CoursesTile/CoursesButton");
         _settingsPanel = GetNodeOrNull<SettingsPanel>("SettingsPanel");
         _launchMonitorStatus = GetNode<Control>("TopBanner/LaunchMonitorStatus");
@@ -35,6 +38,7 @@ public partial class MainMenu : Control
         _settingsButton.Pressed += OnSettingsPressed;
         _exitButton.Pressed += OnExitPressed;
         _rangeButton.Pressed += OnRangePressed;
+        _rangeSpikeButton.Pressed += OnRangeSpikePressed;
         _coursesButton.Pressed += OnCoursesPressed;
         if (_tcpServer != null)
             _tcpServer.ConnectionStatusChanged += OnTcpConnectionStatusChanged;
@@ -54,6 +58,8 @@ public partial class MainMenu : Control
             _exitButton.Pressed -= OnExitPressed;
         if (_rangeButton != null)
             _rangeButton.Pressed -= OnRangePressed;
+        if (_rangeSpikeButton != null)
+            _rangeSpikeButton.Pressed -= OnRangeSpikePressed;
         if (_coursesButton != null)
             _coursesButton.Pressed -= OnCoursesPressed;
         if (_tcpServer != null)
@@ -78,6 +84,13 @@ public partial class MainMenu : Control
     private void OnCoursesPressed()
     {
         StartSceneLoad(_coursesButton, CoursesScenePath);
+    }
+
+    private void OnRangeSpikePressed()
+    {
+        Error transitionError = GetTree().ChangeSceneToFile(RangeSpikeScenePath);
+        if (transitionError != Error.Ok)
+            GD.PushError($"Failed to open range spike scene '{RangeSpikeScenePath}'. Error: {transitionError}");
     }
 
     private void StartSceneLoad(Button sourceButton, string scenePath)
