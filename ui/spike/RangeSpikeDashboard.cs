@@ -28,7 +28,6 @@ public partial class RangeSpikeDashboard : Control
     private SpinBox _shotCountSpinBox;
     private OptionButton _windowPresetOption;
     private CheckBox _capWindowSizeCheckBox;
-    private OptionButton _modeOption;
     private HFlowContainer _controlsFlow;
     private Label _statusLabel;
     private Label _windowInfoLabel;
@@ -43,8 +42,12 @@ public partial class RangeSpikeDashboard : Control
     private bool _isPortraitLayout;
     private int _liveShotCounter;
     private SpikeTileVisibilityDialog _visibilityDialog;
+    private SpikeStatsDialog _statsDialog;
     private readonly HashSet<string> _visibleTileIds = new();
     private List<SpikeTileSpec> _allTileSpecs = new();
+    // Shot navigation
+    private RangeSpikeShotSet _focusedSet;
+    private int _focusedTraceIndex = -1;
 
     public override void _Ready()
     {
@@ -110,6 +113,11 @@ public partial class RangeSpikeDashboard : Control
         _visibilityDialog.VisibilityChanged += OnTileVisibilityChanged;
         _visibilityDialog.Visible = false;
         AddChild(_visibilityDialog);
+
+        _statsDialog = new SpikeStatsDialog();
+        _statsDialog.StatsChanged += OnStatsChanged;
+        _statsDialog.Visible = false;
+        AddChild(_statsDialog);
     }
 
     private Control BuildToolbar()
@@ -210,6 +218,16 @@ public partial class RangeSpikeDashboard : Control
         };
         _controlsFlow.AddChild(tilesButton);
 
+        Button statsButton = new() { Text = "Stats" };
+        statsButton.Pressed += () =>
+        {
+            _statsDialog.Populate(new HashSet<string>(_statPanel != null
+                ? GetCurrentEnabledStats()
+                : SpikeStatsDialog.DefaultEnabled));
+            _statsDialog.PopupCentered();
+        };
+        _controlsFlow.AddChild(statsButton);
+
         _windowPresetOption = new OptionButton();
         _windowPresetOption.AddItem("1280 x 720", 0);
         _windowPresetOption.AddItem("1600 x 900", 1);
@@ -231,24 +249,6 @@ public partial class RangeSpikeDashboard : Control
         _capWindowSizeCheckBox.Toggled += OnCapWindowSizeToggled;
         _controlsFlow.AddChild(_capWindowSizeCheckBox);
 
-        _modeOption = new OptionButton();
-        _modeOption.AddItem("Proximity: 5 shots within N feet");
-        _modeOption.AddItem("Shape: cut 5-15 yards");
-        _modeOption.AddItem("Shape: slice 30+ yards");
-        _controlsFlow.AddChild(_modeOption);
-
-        Button startModeButton = new() { Text = "Start Mode" };
-        startModeButton.Pressed += () => AppendModeEvent($"Mode started: {_modeOption.GetItemText(_modeOption.Selected)}");
-        _controlsFlow.AddChild(startModeButton);
-
-        Button simulateModeButton = new() { Text = "Sim Event" };
-        simulateModeButton.Pressed += () => AppendModeEvent("Simulation event raised for current mode.");
-        _controlsFlow.AddChild(simulateModeButton);
-
-        Button endModeButton = new() { Text = "End Mode" };
-        endModeButton.Pressed += () => AppendModeEvent("Mode ended.");
-        _controlsFlow.AddChild(endModeButton);
-
         return toolbarPanel;
     }
 
@@ -256,6 +256,71 @@ public partial class RangeSpikeDashboard : Control
     {
         if (what == NotificationResized)
             ApplyResponsiveLayout(force: false);
+    }
+
+    public override void _Input(InputEvent ev)
+    {
+        if (ev is not InputEventKey keyEv || !keyEv.Pressed || keyEv.Echo) return;
+        if (keyEv.Keycode == Key.Left)  { NavigateFocusedShot(-1); GetViewport().SetInputAsHandled(); }
+        if (keyEv.Keycode == Key.Right) { NavigateFocusedShot(+1); GetViewport().SetInputAsHandled(); }
+    }
+
+    // ── Shot navigation ────────────────────────────────────────────────────────
+
+    private void SetFocusedSet(RangeSpikeShotSet set)
+    {
+        _focusedSet = set;
+        _focusedTraceIndex = set.Traces.Count - 1;
+    }
+
+    private void NavigateFocusedShot(int delta)
+    {
+        if (_focusedSet == null || _focusedSet.Traces.Count == 0) return;
+
+        _focusedTraceIndex = Mathf.Clamp(
+            _focusedTraceIndex + delta, 0, _focusedSet.Traces.Count - 1);
+
+        ApplyFocusColors(_focusedSet);
+
+        // If there is a paired set (e.g. libgolf sibling), navigate it in sync.
+        string siblingLabel = _focusedSet.Label.StartsWith("libgolf — ")
+            ? _focusedSet.Label["libgolf — ".Length..]
+            : "libgolf — " + _focusedSet.Label;
+        foreach (var set in _shotSets)
+        {
+            if (set.Label == siblingLabel && set.Traces.Count > 0)
+            {
+                int sibIdx = Mathf.Clamp(_focusedTraceIndex, 0, set.Traces.Count - 1);
+                ApplyFocusColors(set, sibIdx);
+            }
+        }
+
+        RefreshPlots();
+    }
+
+    private void ApplyFocusColors(RangeSpikeShotSet set, int? overrideIndex = null)
+    {
+        int idx = overrideIndex ?? _focusedTraceIndex;
+        bool isLibgolf = set.Label.StartsWith("libgolf");
+        Color focusColor = isLibgolf ? HitShotColorLibgolf : HitShotColorOF;
+        for (int i = 0; i < set.Traces.Count; i++)
+        {
+            set.Traces[i].DisplayColor = (i == idx) ? focusColor : set.Traces[i].Color;
+        }
+    }
+
+    // ── Stats dialog ───────────────────────────────────────────────────────────
+
+    private readonly HashSet<string> _currentEnabledStats =
+        new(SpikeStatsDialog.DefaultEnabled);
+
+    private IEnumerable<string> GetCurrentEnabledStats() => _currentEnabledStats;
+
+    private void OnStatsChanged(string[] enabledIds)
+    {
+        _currentEnabledStats.Clear();
+        foreach (string id in enabledIds) _currentEnabledStats.Add(id);
+        _statPanel?.SetEnabledStats(_currentEnabledStats);
     }
 
     // ── TCP server integration ─────────────────────────────────────────────────
@@ -292,6 +357,7 @@ public partial class RangeSpikeDashboard : Control
                 speed, vla, hla, backspin, sidespin);
             trace.DisplayColor = HitShotColorOF;
             set.Traces.Add(trace);
+            SetFocusedSet(set);
         }
 
         if (engineId == 1 || engineId == 2)
@@ -307,6 +373,8 @@ public partial class RangeSpikeDashboard : Control
                     var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
                     var trace = new RangeSpikeShotTrace(
                         set.Label, $"LM #{set.Traces.Count + 1}", "LM", refColor, pts);
+                    trace.SpeedMph = speed; trace.LaunchAngleDeg = vla; trace.DirectionDeg = hla;
+                    trace.BackspinRpm = backspin; trace.SidespinRpm = sidespin;
                     trace.DisplayColor = HitShotColorLibgolf;
                     set.Traces.Add(trace);
                 }
@@ -438,6 +506,9 @@ public partial class RangeSpikeDashboard : Control
         var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
         string label = $"libgolf — {preset.DisplayName}";
         var trace = new RangeSpikeShotTrace(label, "nominal", preset.ClubLabel, refColor, points);
+        trace.SpeedMph = preset.SpeedMph; trace.LaunchAngleDeg = preset.LaunchAngleDeg;
+        trace.DirectionDeg = preset.LaunchDirectionDeg; trace.BackspinRpm = preset.BackspinRpm;
+        trace.SidespinRpm = preset.SidespinRpm;
         var set = new RangeSpikeShotSet(label, preset, new List<RangeSpikeShotTrace> { trace });
 
         float carryYd = trace.LandingPoint.X / 0.9144f;
@@ -481,6 +552,7 @@ public partial class RangeSpikeDashboard : Control
                 speed, vla, hla, backspin, sidespin);
             trace.DisplayColor = HitShotColorOF;
             liveSet.Traces.Add(trace);
+            SetFocusedSet(liveSet);
         }
 
         if (engineId == 1 || engineId == 2)
@@ -501,6 +573,8 @@ public partial class RangeSpikeDashboard : Control
                     string label = $"libgolf — {preset.DisplayName} Live";
                     var trace = new RangeSpikeShotTrace(label, $"{preset.ClubLabel} #{libgolfSet.Traces.Count + 1}",
                         preset.ClubLabel, refColor, pts);
+                    trace.SpeedMph = speed; trace.LaunchAngleDeg = vla; trace.DirectionDeg = hla;
+                    trace.BackspinRpm = backspin; trace.SidespinRpm = sidespin;
                     trace.DisplayColor = HitShotColorLibgolf;
                     libgolfSet.Traces.Add(trace);
                 }

@@ -23,6 +23,12 @@ public sealed class RangeSpikeShotTrace
     public Color DisplayColor { get; set; }
     public List<Vector3> Points { get; }
     public Vector3 LandingPoint { get; }
+    // Launch parameters — set by factory methods, 0 if unknown (e.g. older traces).
+    public float SpeedMph { get; set; }
+    public float LaunchAngleDeg { get; set; }   // VLA
+    public float DirectionDeg { get; set; }      // HLA
+    public float BackspinRpm { get; set; }
+    public float SidespinRpm { get; set; }
 }
 
 public sealed class RangeSpikeShotSet
@@ -75,8 +81,11 @@ public sealed class RangeSpikeTrajectorySimulator
     {
         var (speed, vla, hla, backspin, sidespin) = RandomizeParams(preset, seed);
         string shotLabel = $"{preset.ClubLabel} #{shotIndex}";
-        return new RangeSpikeShotTrace(setLabel, shotLabel, preset.ClubLabel, preset.Color,
+        var trace = new RangeSpikeShotTrace(setLabel, shotLabel, preset.ClubLabel, preset.Color,
             SimulateFlight(speed, vla, hla, backspin, sidespin));
+        trace.SpeedMph = speed; trace.LaunchAngleDeg = vla; trace.DirectionDeg = hla;
+        trace.BackspinRpm = backspin; trace.SidespinRpm = sidespin;
+        return trace;
     }
 
     public RangeSpikeShotTrace GenerateShotTraceFromParams(
@@ -84,8 +93,11 @@ public sealed class RangeSpikeTrajectorySimulator
         float speedMph, float launchAngleDeg, float directionDeg, float backspinRpm, float sidespinRpm)
     {
         string shotLabel = $"{clubLabel} #{shotIndex}";
-        return new RangeSpikeShotTrace(setLabel, shotLabel, clubLabel, color,
+        var trace = new RangeSpikeShotTrace(setLabel, shotLabel, clubLabel, color,
             SimulateFlight(speedMph, launchAngleDeg, directionDeg, backspinRpm, sidespinRpm));
+        trace.SpeedMph = speedMph; trace.LaunchAngleDeg = launchAngleDeg; trace.DirectionDeg = directionDeg;
+        trace.BackspinRpm = backspinRpm; trace.SidespinRpm = sidespinRpm;
+        return trace;
     }
 
     // Extracts launch parameters from a TcpServer HitBall payload (the BallData sub-dict).
