@@ -60,6 +60,7 @@ public partial class RangeSpikeDashboard : Control
             AppendModeEvent("libgolf bridge ready. Set Engine → libgolf or Both, then Add Shot Set to compare.");
         else
             AppendModeEvent("libgolf bridge not built. Run tools/libgolf-bridge/build.sh to enable it.");
+        ConnectTcpServer();
         UpdateWindowInfo();
     }
 
@@ -257,6 +258,74 @@ public partial class RangeSpikeDashboard : Control
             ApplyResponsiveLayout(force: false);
     }
 
+    // ── TCP server integration ─────────────────────────────────────────────────
+
+    // Palette colour for TCP live traces (replaced by red/green on most-recent shot).
+    private static readonly Color TcpTraceColor = new(0.65f, 0.85f, 1.0f, 0.9f); // light blue
+
+    private void ConnectTcpServer()
+    {
+        var tcp = GetNodeOrNull<TcpServer>("/root/TcpServerService");
+        if (tcp == null)
+        {
+            AppendModeEvent("TcpServer autoload not found — TCP shots disabled.");
+            return;
+        }
+        tcp.HitBall += OnTcpHitBall;
+        tcp.ConnectionStatusChanged += OnTcpConnectionStatusChanged;
+        AppendModeEvent("TCP server connected. Shots from launch monitor will accumulate in TCP Live set.");
+    }
+
+    private void OnTcpHitBall(Godot.Collections.Dictionary data)
+    {
+        var (speed, vla, hla, backspin, sidespin) = _simulator.ExtractTcpParams(data);
+        int engineId = _engineOption.GetItemId(_engineOption.Selected);
+        _liveShotCounter++;
+
+        if (engineId == 0 || engineId == 2)
+        {
+            var set = GetOrCreateNamedLiveSet("TCP Live", preset: null);
+            RecolorLastTrace(set, isLibgolf: false);
+
+            var trace = _simulator.GenerateShotTraceFromParams(
+                set.Label, set.Traces.Count + 1, "LM", TcpTraceColor,
+                speed, vla, hla, backspin, sidespin);
+            trace.DisplayColor = HitShotColorOF;
+            set.Traces.Add(trace);
+        }
+
+        if (engineId == 1 || engineId == 2)
+        {
+            if (_libgolfBridge.IsAvailable())
+            {
+                var set = GetOrCreateNamedLiveSet("libgolf — TCP Live", preset: null);
+                RecolorLastTrace(set, isLibgolf: true);
+
+                var pts = _libgolfBridge.RunSimulation(speed, vla, hla, backspin, sidespin);
+                if (pts != null && pts.Count >= 2)
+                {
+                    var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
+                    var trace = new RangeSpikeShotTrace(
+                        set.Label, $"LM #{set.Traces.Count + 1}", "LM", refColor, pts);
+                    trace.DisplayColor = HitShotColorLibgolf;
+                    set.Traces.Add(trace);
+                }
+            }
+        }
+
+        AppendModeEvent($"TCP shot #{_liveShotCounter}: {speed:F0} mph, VLA {vla:F1}°, HLA {hla:F1}°, BS {backspin:F0}, SS {sidespin:F0} rpm.");
+        RefreshPlots();
+    }
+
+    private void OnTcpConnectionStatusChanged(bool connected, string deviceId)
+    {
+        string msg = connected
+            ? $"Launch monitor connected: {deviceId}"
+            : "Launch monitor disconnected.";
+        AppendModeEvent(msg);
+        _statusLabel.Text = msg;
+    }
+
     private void BuildTileContent()
     {
         _viewportTileContent = new VBoxContainer();
@@ -405,10 +474,7 @@ public partial class RangeSpikeDashboard : Control
         if (engineId == 0 || engineId == 2)
         {
             RangeSpikeShotSet liveSet = GetOrCreateLiveSet(preset, libgolf: false);
-
-            // Recolour the previous last trace back to the club palette colour.
-            if (liveSet.Traces.Count > 0)
-                liveSet.Traces[liveSet.Traces.Count - 1].DisplayColor = preset.Color;
+            RecolorLastTrace(liveSet, isLibgolf: false);
 
             RangeSpikeShotTrace trace = _simulator.GenerateShotTraceFromParams(
                 liveSet.Label, liveSet.Traces.Count + 1, preset.ClubLabel, preset.Color,
@@ -426,11 +492,7 @@ public partial class RangeSpikeDashboard : Control
             else
             {
                 RangeSpikeShotSet libgolfSet = GetOrCreateLiveSet(preset, libgolf: true);
-
-                // Recolour the previous last libgolf trace back to gold.
-                if (libgolfSet.Traces.Count > 0)
-                    libgolfSet.Traces[libgolfSet.Traces.Count - 1].DisplayColor =
-                        libgolfSet.Traces[libgolfSet.Traces.Count - 1].Color;
+                RecolorLastTrace(libgolfSet, isLibgolf: true);
 
                 List<Vector3> pts = _libgolfBridge.RunSimulation(speed, vla, hla, backspin, sidespin);
                 if (pts != null && pts.Count >= 2)
@@ -641,6 +703,11 @@ public partial class RangeSpikeDashboard : Control
     private RangeSpikeShotSet GetOrCreateLiveSet(RangeSpikeShotPreset preset, bool libgolf)
     {
         string label = libgolf ? $"libgolf — {preset.DisplayName} Live" : $"{preset.DisplayName} Live";
+        return GetOrCreateNamedLiveSet(label, preset);
+    }
+
+    private RangeSpikeShotSet GetOrCreateNamedLiveSet(string label, RangeSpikeShotPreset preset)
+    {
         foreach (RangeSpikeShotSet shotSet in _shotSets)
         {
             if (shotSet.Label == label)
@@ -650,6 +717,15 @@ public partial class RangeSpikeDashboard : Control
         var newSet = new RangeSpikeShotSet(label, preset, new List<RangeSpikeShotTrace>());
         _shotSets.Add(newSet);
         return newSet;
+    }
+
+    // Resets the last trace in a set back to its palette colour before a new shot is added.
+    private static void RecolorLastTrace(RangeSpikeShotSet set, bool isLibgolf)
+    {
+        if (set.Traces.Count == 0) return;
+        var last = set.Traces[set.Traces.Count - 1];
+        last.DisplayColor = last.Color; // restore to palette / gold colour
+        _ = isLibgolf; // reserved for future per-engine logic
     }
 
     private void ApplyWindowConstraints(Vector2I presetSize, bool capToPreset)

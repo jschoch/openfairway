@@ -88,6 +88,20 @@ public sealed class RangeSpikeTrajectorySimulator
             SimulateFlight(speedMph, launchAngleDeg, directionDeg, backspinRpm, sidespinRpm));
     }
 
+    // Extracts launch parameters from a TcpServer HitBall payload (the BallData sub-dict).
+    // Handles BackSpin/SideSpin or TotalSpin/SpinAxis interchangeably via ShotSetup.ParseSpin.
+    public (float speed, float vla, float hla, float backspin, float sidespin) ExtractTcpParams(
+        Godot.Collections.Dictionary data)
+    {
+        float speed = data.TryGetValue("Speed", out var sv) ? sv.AsSingle() : 0f;
+        float vla   = data.TryGetValue("VLA",   out var vv) ? vv.AsSingle() : 0f;
+        float hla   = data.TryGetValue("HLA",   out var hv) ? hv.AsSingle() : 0f;
+        var spin    = _shotSetup.ParseSpin(data, emitConsistencyWarnings: false);
+        float backspin = spin.TryGetValue("backspin", out var bs) ? bs.AsSingle() : 0f;
+        float sidespin = spin.TryGetValue("sidespin", out var ss) ? ss.AsSingle() : 0f;
+        return (speed, vla, hla, backspin, sidespin);
+    }
+
     public RangeSpikeShotSet GenerateShotSet(RangeSpikeShotPreset preset, int shotCount, int seed)
     {
         var traces = new List<RangeSpikeShotTrace>();
