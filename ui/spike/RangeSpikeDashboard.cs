@@ -323,6 +323,19 @@ public partial class RangeSpikeDashboard : Control
         _statPanel?.SetEnabledStats(_currentEnabledStats);
     }
 
+    // ── libgolf async helper ───────────────────────────────────────────────────
+
+    // Runs the libgolf bridge on a background thread and calls onComplete on
+    // the Godot main thread once the result is ready.
+    // onComplete receives null on failure — callers must handle that.
+    private void RunLibgolfAsync(
+        float speed, float vla, float hla, float backspin, float sidespin,
+        System.Action<List<Vector3>> onComplete)
+    {
+        _libgolfBridge.RunSimulationAsync(speed, vla, hla, backspin, sidespin)
+            .ContinueWith(t => Callable.From(() => onComplete(t.Result)).CallDeferred());
+    }
+
     // ── TCP server integration ─────────────────────────────────────────────────
 
     // Palette colour for TCP live traces (replaced by red/green on most-recent shot).
@@ -366,18 +379,20 @@ public partial class RangeSpikeDashboard : Control
             {
                 var set = GetOrCreateNamedLiveSet("libgolf — TCP Live", preset: null);
                 RecolorLastTrace(set, isLibgolf: true);
-
-                var pts = _libgolfBridge.RunSimulation(speed, vla, hla, backspin, sidespin);
-                if (pts != null && pts.Count >= 2)
+                float s = speed, v = vla, h = hla, bs = backspin, ss = sidespin;
+                int nextIdx = set.Traces.Count + 1;
+                RunLibgolfAsync(s, v, h, bs, ss, pts =>
                 {
+                    if (pts == null || pts.Count < 2) return;
                     var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
                     var trace = new RangeSpikeShotTrace(
-                        set.Label, $"LM #{set.Traces.Count + 1}", "LM", refColor, pts);
-                    trace.SpeedMph = speed; trace.LaunchAngleDeg = vla; trace.DirectionDeg = hla;
-                    trace.BackspinRpm = backspin; trace.SidespinRpm = sidespin;
+                        set.Label, $"LM #{nextIdx}", "LM", refColor, pts);
+                    trace.SpeedMph = s; trace.LaunchAngleDeg = v; trace.DirectionDeg = h;
+                    trace.BackspinRpm = bs; trace.SidespinRpm = ss;
                     trace.DisplayColor = HitShotColorLibgolf;
                     set.Traces.Add(trace);
-                }
+                    RefreshPlots();
+                });
             }
         }
 
@@ -461,12 +476,39 @@ public partial class RangeSpikeDashboard : Control
             AppendModeEvent($"OpenFairway: {shotCount} shots for {preset.DisplayName}.");
         }
 
-        // libgolf single nominal reference trace
+        // libgolf single nominal reference trace — runs async so the main thread stays live.
         if (engineId == 1 || engineId == 2)
         {
-            RangeSpikeShotSet refSet = GenerateLibgolfSet(preset);
-            if (refSet != null)
-                _shotSets.Add(refSet);
+            if (!_libgolfBridge.IsAvailable())
+            {
+                _statusLabel.Text = "libgolf bridge not built — run tools/libgolf-bridge/build.sh.";
+            }
+            else
+            {
+                AppendModeEvent($"libgolf: simulating {preset.DisplayName}…");
+                RunLibgolfAsync(preset.SpeedMph, preset.LaunchAngleDeg, preset.LaunchDirectionDeg,
+                    preset.BackspinRpm, preset.SidespinRpm, pts =>
+                {
+                    if (pts == null || pts.Count < 2)
+                    {
+                        _statusLabel.Text = "libgolf simulation failed — see Godot output log.";
+                        return;
+                    }
+                    var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
+                    string label = $"libgolf — {preset.DisplayName}";
+                    var trace = new RangeSpikeShotTrace(label, "nominal", preset.ClubLabel, refColor, pts);
+                    trace.SpeedMph = preset.SpeedMph; trace.LaunchAngleDeg = preset.LaunchAngleDeg;
+                    trace.DirectionDeg = preset.LaunchDirectionDeg; trace.BackspinRpm = preset.BackspinRpm;
+                    trace.SidespinRpm = preset.SidespinRpm;
+                    var set = new RangeSpikeShotSet(label, preset, new List<RangeSpikeShotTrace> { trace });
+                    _shotSets.Add(set);
+                    float carryYd = trace.LandingPoint.X / 0.9144f;
+                    float offYd = trace.LandingPoint.Z / 0.9144f;
+                    string offStr = Mathf.Abs(offYd) < 0.3f ? "on line" : $"{Mathf.Abs(offYd):F1} yd {(offYd < 0 ? "L" : "R")}";
+                    AppendModeEvent($"libgolf: {preset.DisplayName} — {carryYd:F0} yd carry, {offStr}.");
+                    RefreshPlots();
+                });
+            }
         }
 
         RefreshPlots();
@@ -477,46 +519,6 @@ public partial class RangeSpikeDashboard : Control
         _shotSets.Clear();
         AppendModeEvent("Cleared all shot sets.");
         RefreshPlots();
-    }
-
-    // Runs the libgolf bridge for the preset's nominal launch params and returns
-    // a single-trace shot set, or null on failure.
-    private RangeSpikeShotSet GenerateLibgolfSet(RangeSpikeShotPreset preset)
-    {
-        if (!_libgolfBridge.IsAvailable())
-        {
-            _statusLabel.Text = "libgolf bridge not built — run tools/libgolf-bridge/build.sh.";
-            return null;
-        }
-
-        List<Vector3> points = _libgolfBridge.RunSimulation(
-            preset.SpeedMph,
-            preset.LaunchAngleDeg,
-            preset.LaunchDirectionDeg,
-            preset.BackspinRpm,
-            preset.SidespinRpm);
-
-        if (points == null || points.Count < 2)
-        {
-            _statusLabel.Text = "libgolf simulation failed — see Godot output log.";
-            return null;
-        }
-
-        // Bright gold — distinct from all OpenFairway set colours.
-        var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
-        string label = $"libgolf — {preset.DisplayName}";
-        var trace = new RangeSpikeShotTrace(label, "nominal", preset.ClubLabel, refColor, points);
-        trace.SpeedMph = preset.SpeedMph; trace.LaunchAngleDeg = preset.LaunchAngleDeg;
-        trace.DirectionDeg = preset.LaunchDirectionDeg; trace.BackspinRpm = preset.BackspinRpm;
-        trace.SidespinRpm = preset.SidespinRpm;
-        var set = new RangeSpikeShotSet(label, preset, new List<RangeSpikeShotTrace> { trace });
-
-        float carryYd = trace.LandingPoint.X / 0.9144f;
-        float offYd = trace.LandingPoint.Z / 0.9144f;
-        string offStr = Mathf.Abs(offYd) < 0.3f ? "on line" : $"{Mathf.Abs(offYd):F1} yd {(offYd < 0 ? "L" : "R")}";
-        AppendModeEvent($"libgolf: {preset.DisplayName} — {carryYd:F0} yd carry, {offStr}.");
-
-        return set;
     }
 
     private void RefreshPlots()
@@ -565,23 +567,26 @@ public partial class RangeSpikeDashboard : Control
             {
                 RangeSpikeShotSet libgolfSet = GetOrCreateLiveSet(preset, libgolf: true);
                 RecolorLastTrace(libgolfSet, isLibgolf: true);
-
-                List<Vector3> pts = _libgolfBridge.RunSimulation(speed, vla, hla, backspin, sidespin);
-                if (pts != null && pts.Count >= 2)
+                float s = speed, v = vla, h = hla, bs = backspin, ss = sidespin;
+                string lg_label = $"libgolf — {preset.DisplayName} Live";
+                string lg_club = preset.ClubLabel;
+                int nextIdx = libgolfSet.Traces.Count + 1;
+                RunLibgolfAsync(s, v, h, bs, ss, pts =>
                 {
+                    if (pts == null || pts.Count < 2)
+                    {
+                        AppendModeEvent("libgolf hit-shot failed — see output log.");
+                        return;
+                    }
                     var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
-                    string label = $"libgolf — {preset.DisplayName} Live";
-                    var trace = new RangeSpikeShotTrace(label, $"{preset.ClubLabel} #{libgolfSet.Traces.Count + 1}",
-                        preset.ClubLabel, refColor, pts);
-                    trace.SpeedMph = speed; trace.LaunchAngleDeg = vla; trace.DirectionDeg = hla;
-                    trace.BackspinRpm = backspin; trace.SidespinRpm = sidespin;
+                    var trace = new RangeSpikeShotTrace(lg_label, $"{lg_club} #{nextIdx}",
+                        lg_club, refColor, pts);
+                    trace.SpeedMph = s; trace.LaunchAngleDeg = v; trace.DirectionDeg = h;
+                    trace.BackspinRpm = bs; trace.SidespinRpm = ss;
                     trace.DisplayColor = HitShotColorLibgolf;
                     libgolfSet.Traces.Add(trace);
-                }
-                else
-                {
-                    AppendModeEvent("libgolf hit-shot failed — see output log.");
-                }
+                    RefreshPlots();
+                });
             }
         }
 

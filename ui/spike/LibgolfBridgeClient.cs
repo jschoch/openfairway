@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Godot;
 
 // Wraps the libgolf-bridge CLI executable, converting its JSON trajectory
@@ -27,9 +28,24 @@ public sealed class LibgolfBridgeClient
 
     public bool IsAvailable() => File.Exists(_binaryPath);
 
-    // Runs the bridge for the given nominal launch parameters (no randomness).
-    // Returns null on any error (binary missing, non-zero exit, bad JSON, etc.).
-    public List<Vector3> RunSimulation(
+    // Runs the bridge on a background thread.
+    // onComplete is invoked on the CALLER'S thread via the returned Task —
+    // callers must dispatch back to the Godot main thread themselves
+    // (e.g. via Callable.From(...).CallDeferred()).
+    // Returns null in the result on any error.
+    public Task<List<Vector3>> RunSimulationAsync(
+        float speedMph,
+        float launchAngleDeg,
+        float directionDeg,
+        float backspinRpm,
+        float sidespinRpm)
+    {
+        return Task.Run(() => RunSimulationBlocking(speedMph, launchAngleDeg, directionDeg, backspinRpm, sidespinRpm));
+    }
+
+    // Blocking version — safe to call from a background thread.
+    // Do NOT call from the Godot main thread.
+    private List<Vector3> RunSimulationBlocking(
         float speedMph,
         float launchAngleDeg,
         float directionDeg,
@@ -64,9 +80,17 @@ public sealed class LibgolfBridgeClient
             };
 
             using var proc = Process.Start(psi);
-            stdout = proc.StandardOutput.ReadToEnd();
-            stderr = proc.StandardError.ReadToEnd();
+
+            // Read stdout and stderr concurrently to prevent deadlock.
+            // Sequential reads (stdout then stderr) deadlock when the process
+            // fills the stderr pipe buffer while the parent blocks on stdout.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            Task.WaitAll(stdoutTask, stderrTask);
             proc.WaitForExit();
+
+            stdout = stdoutTask.Result;
+            stderr = stderrTask.Result;
             exitCode = proc.ExitCode;
         }
         catch (System.Exception ex)
