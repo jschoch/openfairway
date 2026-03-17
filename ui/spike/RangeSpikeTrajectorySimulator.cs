@@ -58,6 +58,9 @@ public sealed class RangeSpikeTrajectorySimulator
 
     private readonly ShotSetup _shotSetup = new();
     private readonly Aerodynamics _aerodynamics = new();
+    // Uses the same default profile as PhysicsAdapter so regime-calibrated
+    // drag/lift overrides (e.g. drag×0.82 for slow irons) are applied.
+    private readonly BallPhysicsProfile _ballProfile = new();
 
     // Variation constants (uniform ±amplitude):
     //   Ball speed   : ±3.5 mph
@@ -159,18 +162,21 @@ public sealed class RangeSpikeTrajectorySimulator
         float airDensity = _aerodynamics.GetAirDensity(DefaultAltitudeFt, DefaultTempF, PhysicsEnums.Units.Imperial);
         float airViscosity = _aerodynamics.GetDynamicViscosity(DefaultTempF, PhysicsEnums.Units.Imperial);
 
+        // Resolve regime-calibrated drag/lift scales — mirrors PhysicsAdapter.SimulateCarryOnlyInternal.
+        float totalSpinRpm = Mathf.Sqrt(backspinRpm * backspinRpm + sidespinRpm * sidespinRpm);
+        RegimeScaleOverride regimeScale = _ballProfile.ResolveScaleOverride(
+            speedMph, launchAngleDeg, totalSpinRpm, out _, out _);
+        float dragScale = _ballProfile.DragScaleMultiplier * regimeScale.DragScaleMultiplier;
+        float liftScale = _ballProfile.LiftScaleMultiplier * regimeScale.LiftScaleMultiplier;
+        FlightProfile fp = _ballProfile.ResolvedFlight;
+
         Vector3 position = points[0];
         int maxSteps = Mathf.RoundToInt(MaxTime / BallPhysics.SIMULATION_DT);
         for (int i = 0; i < maxSteps; i++)
         {
             FlightAerodynamicsSample sample = BallPhysics.SampleFlightAerodynamics(
-                velocity,
-                omega,
-                airDensity,
-                airViscosity,
-                1.0f,
-                1.0f,
-                launchAngleDeg);
+                velocity, omega, airDensity, airViscosity,
+                dragScale, liftScale, launchAngleDeg, fp);
 
             Vector3 gravity = new(0.0f, -9.81f * BallPhysics.MASS, 0.0f);
             Vector3 airForces = Vector3.Zero;
