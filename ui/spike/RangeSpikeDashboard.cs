@@ -332,10 +332,11 @@ public partial class RangeSpikeDashboard : Control
     {
         int idx = overrideIndex ?? _focusedTraceIndex;
         bool isLibgolf = set.Label.StartsWith("libgolf");
-        Color focusColor = isLibgolf ? HitShotColorLibgolf : HitShotColorOF;
+        Color brightColor = isLibgolf ? HitShotColorLibgolf : HitShotColorOF;
+        Color dimColor    = isLibgolf ? DimColorLibgolf      : DimColorOF;
         for (int i = 0; i < set.Traces.Count; i++)
         {
-            set.Traces[i].DisplayColor = (i == idx) ? focusColor : set.Traces[i].Color;
+            set.Traces[i].DisplayColor = (i == idx) ? brightColor : dimColor;
         }
     }
 
@@ -379,10 +380,7 @@ public partial class RangeSpikeDashboard : Control
 
     // ── TCP server integration ─────────────────────────────────────────────────
 
-    // Palette colour for TCP live traces (replaced by red/green on most-recent shot).
-    private static readonly Color TcpTraceColor = new(0.65f, 0.85f, 1.0f, 0.9f); // light blue
-
-    private void ConnectTcpServer()
+private void ConnectTcpServer()
     {
         var tcp = GetNodeOrNull<TcpServer>("/root/TcpServerService");
         if (tcp == null)
@@ -408,7 +406,7 @@ public partial class RangeSpikeDashboard : Control
             RecolorLastTrace(set, isLibgolf: false);
 
             var trace = _simulator.GenerateShotTraceFromParams(
-                set.Label, set.Traces.Count + 1, "LM", TcpTraceColor,
+                set.Label, set.Traces.Count + 1, "Launch Monitor", DimColorOF,
                 speed, vla, hla, backspin, sidespin);
             trace.LmCarryDistanceYd = lmCarry;
             trace.DisplayColor = HitShotColorOF;
@@ -427,9 +425,8 @@ public partial class RangeSpikeDashboard : Control
                 RunLibgolfAsync(s, v, h, bs, ss, pts =>
                 {
                     if (pts == null || pts.Count < 2) return;
-                    var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
                     var trace = new RangeSpikeShotTrace(
-                        set.Label, $"LM #{nextIdx}", "LM", refColor, pts);
+                        set.Label, $"Launch Monitor #{nextIdx}", "Launch Monitor", DimColorLibgolf, pts);
                     trace.SpeedMph = s; trace.LaunchAngleDeg = v; trace.DirectionDeg = h;
                     trace.BackspinRpm = bs; trace.SidespinRpm = ss;
                     trace.DisplayColor = HitShotColorLibgolf;
@@ -515,6 +512,10 @@ public partial class RangeSpikeDashboard : Control
         {
             RangeSpikeShotSet set = _simulator.GenerateShotSet(
                 preset, shotCount, seed: _shotSets.Count * 101 + preset.Id.GetHashCode());
+            // Override preset palette colors so OF shots always render in the engine color,
+            // matching the stat panel's ColOF legend.
+            foreach (var t in set.Traces)
+                t.Color = t.DisplayColor = HitShotColorOF;
             _shotSets.Add(set);
             AppendModeEvent($"OpenFairway: {shotCount} shots for {preset.DisplayName}.");
         }
@@ -537,9 +538,8 @@ public partial class RangeSpikeDashboard : Control
                         _statusLabel.Text = "libgolf simulation failed — see Godot output log.";
                         return;
                     }
-                    var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
                     string label = $"libgolf — {preset.DisplayName}";
-                    var trace = new RangeSpikeShotTrace(label, "nominal", preset.ClubLabel, refColor, pts);
+                    var trace = new RangeSpikeShotTrace(label, "nominal", preset.ClubLabel, HitShotColorLibgolf, pts);
                     trace.SpeedMph = preset.SpeedMph; trace.LaunchAngleDeg = preset.LaunchAngleDeg;
                     trace.DirectionDeg = preset.LaunchDirectionDeg; trace.BackspinRpm = preset.BackspinRpm;
                     trace.SidespinRpm = preset.SidespinRpm;
@@ -627,8 +627,14 @@ public partial class RangeSpikeDashboard : Control
         _shotNavLabel.Text = $"Shot {current}/{total}";
     }
 
-    private static readonly Color HitShotColorOF      = new(0.95f, 0.28f, 0.28f, 1.0f); // red
-    private static readonly Color HitShotColorLibgolf = new(0.28f, 0.85f, 0.48f, 1.0f); // green
+    // Engine colors — must match SpikeStatPanel.ColOF / ColLG / ColLM.
+    // Bright = focused/latest shot. Dim = older non-focused shots.
+    private static readonly Color HitShotColorOF        = new(0.95f, 0.28f, 0.28f, 1.0f); // red
+    private static readonly Color HitShotColorLibgolf   = new(0.28f, 0.85f, 0.48f, 1.0f); // green
+    private static readonly Color HitShotColorLM        = new(1.00f, 0.72f, 0.20f, 1.0f); // orange
+    private static readonly Color DimColorOF            = HitShotColorOF      with { A = 0.45f };
+    private static readonly Color DimColorLibgolf       = HitShotColorLibgolf with { A = 0.45f };
+    private static readonly Color DimColorLM            = HitShotColorLM      with { A = 0.45f };
 
     private void OnViewportHitShotPressed()
     {
@@ -646,7 +652,7 @@ public partial class RangeSpikeDashboard : Control
             RecolorLastTrace(liveSet, isLibgolf: false);
 
             RangeSpikeShotTrace trace = _simulator.GenerateShotTraceFromParams(
-                liveSet.Label, liveSet.Traces.Count + 1, preset.ClubLabel, preset.Color,
+                liveSet.Label, liveSet.Traces.Count + 1, preset.ClubLabel, DimColorOF,
                 speed, vla, hla, backspin, sidespin);
             trace.DisplayColor = HitShotColorOF;
             liveSet.Traces.Add(trace);
@@ -674,9 +680,8 @@ public partial class RangeSpikeDashboard : Control
                         AppendModeEvent("libgolf hit-shot failed — see output log.");
                         return;
                     }
-                    var refColor = new Color(1.0f, 0.88f, 0.25f, 0.95f);
                     var trace = new RangeSpikeShotTrace(lg_label, $"{lg_club} #{nextIdx}",
-                        lg_club, refColor, pts);
+                        lg_club, DimColorLibgolf, pts);
                     trace.SpeedMph = s; trace.LaunchAngleDeg = v; trace.DirectionDeg = h;
                     trace.BackspinRpm = bs; trace.SidespinRpm = ss;
                     trace.DisplayColor = HitShotColorLibgolf;
@@ -907,13 +912,12 @@ public partial class RangeSpikeDashboard : Control
         return newSet;
     }
 
-    // Resets the last trace in a set back to its palette colour before a new shot is added.
+    // Dims the last trace in a set when a new shot is about to be added.
     private static void RecolorLastTrace(RangeSpikeShotSet set, bool isLibgolf)
     {
         if (set.Traces.Count == 0) return;
         var last = set.Traces[set.Traces.Count - 1];
-        last.DisplayColor = last.Color; // restore to palette / gold colour
-        _ = isLibgolf; // reserved for future per-engine logic
+        last.DisplayColor = isLibgolf ? DimColorLibgolf : DimColorOF;
     }
 
     private void ApplyWindowConstraints(Vector2I presetSize)

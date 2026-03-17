@@ -151,13 +151,13 @@ public sealed partial class SpikeStatPanel : Control
 
         // Legend
         float ly = full.End.Y - padding - 12f;
-        DrawRect(new Rect2(x0,         ly + 1f, 10f, 8f), ColLM);
-        DrawLabel("LM",          new Vector2(x0 + 14f,  ly), 10, ColLM);
-        DrawRect(new Rect2(x0 + 44f,  ly + 1f, 10f, 8f), ColOF);
-        DrawLabel("OF",          new Vector2(x0 + 58f,  ly), 10, ColOF);
-        DrawRect(new Rect2(x0 + 88f,  ly + 1f, 10f, 8f), ColLG);
-        DrawLabel("LG",          new Vector2(x0 + 102f, ly), 10, ColLG);
-        DrawLabel("(single-source: input params)", new Vector2(x0 + 132f, ly), 9, ColDim);
+        DrawRect(new Rect2(x0,          ly + 1f, 10f, 8f), ColLM);
+        DrawLabel("Launch Monitor",  new Vector2(x0 + 14f,   ly), 10, ColLM);
+        DrawRect(new Rect2(x0 + 114f, ly + 1f, 10f, 8f), ColOF);
+        DrawLabel("OpenFairway",     new Vector2(x0 + 128f,  ly), 10, ColOF);
+        DrawRect(new Rect2(x0 + 224f, ly + 1f, 10f, 8f), ColLG);
+        DrawLabel("libGolf",         new Vector2(x0 + 238f,  ly), 10, ColLG);
+        DrawLabel("— single-source: input params", new Vector2(x0 + 300f, ly), 9, ColDim);
     }
 
     // ── Row renderers ──────────────────────────────────────────────────────────
