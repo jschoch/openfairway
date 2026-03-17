@@ -20,6 +20,7 @@
 
 #include <libgolf.hpp>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -75,6 +76,11 @@ int main(int argc, char** argv)
     constexpr float FT_TO_M    = 0.3048f;
     constexpr float DT         = 0.01f;
     constexpr int   RECORD_EVERY = 2; // record every 2nd step (~50 Hz output)
+    // Safety cap: 2000 steps × 0.01 s = 20 s of simulated flight.
+    // No real golf shot exceeds ~12 s, so this is a guard against isComplete()
+    // never returning true for edge-case parameters (which causes unbounded
+    // memory growth in the json buffer and ultimately std::bad_alloc).
+    constexpr int   MAX_STEPS  = 2000;
 
     // Pre-allocate output buffer (typical trajectory ~400 points, ~30 chars each)
     std::string json;
@@ -99,10 +105,21 @@ int main(int argc, char** argv)
     float carryX = 0.0f, carryZ = 0.0f; // carry landing coords in metres
 
     int step = 0;
-    while (!sim.isComplete())
+    while (!sim.isComplete() && step < MAX_STEPS)
     {
         sim.step(DT);
         step++;
+
+        // Guard against NaN propagation — once the physics diverges every
+        // subsequent point is NaN and the loop runs to MAX_STEPS uselessly.
+        {
+            const auto& s = sim.getState();
+            if (std::isnan(s.position[0]) || std::isnan(s.position[1]) || std::isnan(s.position[2]))
+            {
+                std::fprintf(stderr, "[libgolf-bridge] NaN detected at step %d — aborting simulation\n", step);
+                break;
+            }
+        }
 
         const char* phase = sim.getCurrentPhaseName();
 

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Godot;
 
 public partial class RangeSpikeDashboard : Control
@@ -27,7 +28,7 @@ public partial class RangeSpikeDashboard : Control
     private OptionButton _presetOption;
     private SpinBox _shotCountSpinBox;
     private OptionButton _windowPresetOption;
-    private CheckBox _capWindowSizeCheckBox;
+
     private HFlowContainer _controlsFlow;
     private Label _statusLabel;
     private Label _windowInfoLabel;
@@ -39,12 +40,21 @@ public partial class RangeSpikeDashboard : Control
     private SpikePlotPanel _sidePlot;
     private SpikePlotPanel _distributionPlot;
     private SpikeStatPanel _statPanel;
+    // Persistent wrapper nodes for tile content — created once, reused across
+    // every RefreshTileCanvas() call to avoid orphaned Godot node leaks.
+    private VBoxContainer _summaryWrapper;
+    private VBoxContainer _logWrapper;
     private bool _isPortraitLayout;
     private int _liveShotCounter;
     private SpikeTileVisibilityDialog _visibilityDialog;
     private SpikeStatsDialog _statsDialog;
+    private Label _shotNavLabel;
     private readonly HashSet<string> _visibleTileIds = new();
+    // Tracks every tile ID ever seen across both orientations so we can
+    // distinguish "new tile → default visible" from "user hid it → keep hidden".
+    private readonly HashSet<string> _everSeenTileIds = new();
     private List<SpikeTileSpec> _allTileSpecs = new();
+    private SpikeLayoutStore.Data _savedLayout = new();
     // Shot navigation
     private RangeSpikeShotSet _focusedSet;
     private int _focusedTraceIndex = -1;
@@ -55,9 +65,28 @@ public partial class RangeSpikeDashboard : Control
         string projectRoot = ProjectSettings.GlobalizePath("res://");
         _libgolfBridge = new LibgolfBridgeClient(projectRoot);
 
+        // Load persisted layout before building UI so controls start with saved values.
+        _savedLayout = SpikeLayoutStore.Load();
+
+        // Pre-populate visibility from saved state so ApplyResponsiveLayout uses it.
+        if (_savedLayout.VisibleTileIds.Count > 0)
+        {
+            _visibleTileIds.UnionWith(_savedLayout.VisibleTileIds);
+            _everSeenTileIds.UnionWith(_savedLayout.AllKnownTileIds);
+        }
+
         BuildUi();
         BuildTileContent();
+
+        // Apply saved window settings now that controls exist.
+        _windowPresetOption.Select(_savedLayout.WindowPresetIndex);
+        _tileCanvas.TileLayoutChanged += SaveLayout;
+
         ApplyResponsiveLayout(force: true);
+        // Apply the saved window size / constraints.
+        if (_windowPresets.TryGetValue(_savedLayout.WindowPresetIndex, out Vector2I savedSize))
+            ApplyWindowPreset(savedSize);
+
         RefreshPlots();
         AppendModeEvent("Spike dashboard ready.");
         if (_libgolfBridge.IsAvailable())
@@ -205,7 +234,7 @@ public partial class RangeSpikeDashboard : Control
         _engineOption.AddItem("OpenFairway", 0);
         _engineOption.AddItem("libgolf (ref)", 1);
         _engineOption.AddItem("All", 2);
-        _engineOption.Select(0);
+        _engineOption.Select(2);
         _controlsFlow.AddChild(_engineOption);
 
         Button tilesButton = new() { Text = "Tiles" };
@@ -222,6 +251,10 @@ public partial class RangeSpikeDashboard : Control
         var displayLastShotCb = new CheckBox { Text = "Last Shot Only" };
         displayLastShotCb.Toggled += pressed => { _displayLastShot = pressed; RefreshPlots(); };
         _controlsFlow.AddChild(displayLastShotCb);
+
+        _shotNavLabel = new Label { Text = "" };
+        _shotNavLabel.AddThemeColorOverride("font_color", new Color("90a0b2"));
+        _controlsFlow.AddChild(_shotNavLabel);
 
         Button statsButton = new() { Text = "Stats" };
         statsButton.Pressed += () =>
@@ -242,17 +275,9 @@ public partial class RangeSpikeDashboard : Control
         _windowPresetOption.AddItem("900 x 1600", 5);
         _windowPresetOption.AddItem("972 x 1728", 6);
         _windowPresetOption.AddItem("1080 x 1920", 7);
-        _windowPresetOption.Select(2);
+        _windowPresetOption.Select(2); // overwritten in _Ready from saved layout
         _windowPresetOption.ItemSelected += OnWindowPresetSelected;
         _controlsFlow.AddChild(_windowPresetOption);
-
-        _capWindowSizeCheckBox = new CheckBox
-        {
-            Text = "Cap Max To Preset",
-            ButtonPressed = true
-        };
-        _capWindowSizeCheckBox.Toggled += OnCapWindowSizeToggled;
-        _controlsFlow.AddChild(_capWindowSizeCheckBox);
 
         return toolbarPanel;
     }
@@ -330,6 +355,10 @@ public partial class RangeSpikeDashboard : Control
 
     // ── libgolf async helper ───────────────────────────────────────────────────
 
+    // Serialise all bridge invocations: libgolf is not safe to run in multiple
+    // concurrent processes (triggers std::bad_alloc / SIGABRT after ~5 shots).
+    private readonly System.Threading.SemaphoreSlim _libgolfSemaphore = new(1, 1);
+
     // Runs the libgolf bridge on a background thread and calls onComplete on
     // the Godot main thread once the result is ready.
     // onComplete receives null on failure — callers must handle that.
@@ -337,8 +366,15 @@ public partial class RangeSpikeDashboard : Control
         float speed, float vla, float hla, float backspin, float sidespin,
         System.Action<List<Vector3>> onComplete)
     {
-        _libgolfBridge.RunSimulationAsync(speed, vla, hla, backspin, sidespin)
-            .ContinueWith(t => Callable.From(() => onComplete(t.Result)).CallDeferred());
+        var sem = _libgolfSemaphore;
+        Task.Run(async () =>
+        {
+            await sem.WaitAsync();
+            List<Vector3> pts;
+            try   { pts = await _libgolfBridge.RunSimulationAsync(speed, vla, hla, backspin, sidespin); }
+            finally { sem.Release(); }
+            Callable.From(() => onComplete(pts)).CallDeferred();
+        });
     }
 
     // ── TCP server integration ─────────────────────────────────────────────────
@@ -442,19 +478,19 @@ public partial class RangeSpikeDashboard : Control
         _modeLog = BuildRichText("Mode lifecycle events will show up here.");
         _setSummary = BuildRichText("No shot sets yet.");
 
-        var summaryWrapper = new VBoxContainer();
-        summaryWrapper.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        summaryWrapper.SizeFlagsVertical = SizeFlags.ExpandFill;
-        summaryWrapper.AddThemeConstantOverride("separation", 8);
-        summaryWrapper.AddChild(BuildSectionLabel("Shot Sets"));
-        summaryWrapper.AddChild(_setSummary);
+        _summaryWrapper = new VBoxContainer();
+        _summaryWrapper.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        _summaryWrapper.SizeFlagsVertical = SizeFlags.ExpandFill;
+        _summaryWrapper.AddThemeConstantOverride("separation", 8);
+        _summaryWrapper.AddChild(BuildSectionLabel("Shot Sets"));
+        _summaryWrapper.AddChild(_setSummary);
 
-        var logWrapper = new VBoxContainer();
-        logWrapper.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        logWrapper.SizeFlagsVertical = SizeFlags.ExpandFill;
-        logWrapper.AddThemeConstantOverride("separation", 8);
-        logWrapper.AddChild(BuildSectionLabel("Mode Events"));
-        logWrapper.AddChild(_modeLog);
+        _logWrapper = new VBoxContainer();
+        _logWrapper.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        _logWrapper.SizeFlagsVertical = SizeFlags.ExpandFill;
+        _logWrapper.AddThemeConstantOverride("separation", 8);
+        _logWrapper.AddChild(BuildSectionLabel("Mode Events"));
+        _logWrapper.AddChild(_modeLog);
         var contents = new Dictionary<string, Control>
         {
             { "viewport_3d", _viewportTileContent },
@@ -462,8 +498,8 @@ public partial class RangeSpikeDashboard : Control
             { "side_view", _sidePlot },
             { "distribution", _distributionPlot },
             { "stats", _statPanel },
-            { "shot_sets", summaryWrapper },
-            { "mode_events", logWrapper },
+            { "shot_sets", _summaryWrapper },
+            { "mode_events", _logWrapper },
         };
         _tileCanvas.ConfigureTiles(new List<SpikeTileSpec>(), contents);
     }
@@ -554,9 +590,41 @@ public partial class RangeSpikeDashboard : Control
         _topDownPlot.SetShotSets(display);
         _sidePlot.SetShotSets(display);
         _distributionPlot.SetShotSets(display);
-        // Stat panel always aggregates the full set for meaningful averages.
-        _statPanel.SetShotSets(_shotSets);
+        // Stat panel always shows the focused/last shot per set so arrow-key
+        // navigation and new TCP shots are immediately reflected, regardless of
+        // whether "Last Shot Only" is active in the viewport.
+        _statPanel.SetShotSets(GetStatSets());
         _setSummary.Text = _simulator.BuildSummary(_shotSets);
+        UpdateShotNavLabel();
+    }
+
+    // Always returns a single-trace projection (focused or last) per set.
+    private List<RangeSpikeShotSet> GetStatSets()
+    {
+        var result = new List<RangeSpikeShotSet>();
+        foreach (var set in _shotSets)
+        {
+            if (set.Traces.Count == 0) continue;
+            int idx = (set == _focusedSet)
+                ? Mathf.Clamp(_focusedTraceIndex, 0, set.Traces.Count - 1)
+                : set.Traces.Count - 1;
+            result.Add(new RangeSpikeShotSet(set.Label, set.Preset,
+                new List<RangeSpikeShotTrace> { set.Traces[idx] }));
+        }
+        return result;
+    }
+
+    private void UpdateShotNavLabel()
+    {
+        if (_shotNavLabel == null) return;
+        if (_focusedSet == null || _focusedSet.Traces.Count == 0)
+        {
+            _shotNavLabel.Text = "";
+            return;
+        }
+        int current = _focusedTraceIndex + 1;
+        int total   = _focusedSet.Traces.Count;
+        _shotNavLabel.Text = $"Shot {current}/{total}";
     }
 
     private static readonly Color HitShotColorOF      = new(0.95f, 0.28f, 0.28f, 1.0f); // red
@@ -628,6 +696,7 @@ public partial class RangeSpikeDashboard : Control
         if (_windowPresets.TryGetValue(presetId, out Vector2I size))
         {
             ApplyWindowPreset(size);
+            SaveLayout();
         }
     }
 
@@ -652,31 +721,20 @@ public partial class RangeSpikeDashboard : Control
         _modeLog.Text = $"{Time.GetDatetimeStringFromSystem()}  {text}\n{_modeLog.Text}".Trim();
     }
 
-    private void OnCapWindowSizeToggled(bool pressed)
-    {
-        int selectedIndex = _windowPresetOption.Selected;
-        int presetId = selectedIndex >= 0 ? _windowPresetOption.GetItemId(selectedIndex) : -1;
-        if (_windowPresets.TryGetValue(presetId, out Vector2I size))
-            ApplyWindowConstraints(size, pressed);
-    }
-
     private void ApplyWindowPreset(Vector2I size)
     {
         Vector2I fittedSize = FitWindowToUsableScreen(size);
         ApplyContentBase(fittedSize);
-        ApplyWindowConstraints(fittedSize, _capWindowSizeCheckBox?.ButtonPressed ?? false);
+        ApplyWindowConstraints(fittedSize);
         DisplayServer.WindowSetSize(fittedSize);
         CenterWindowOnCurrentScreen(fittedSize);
         UpdateWindowInfo();
 
         string orientation = fittedSize.Y > fittedSize.X ? "portrait" : "landscape";
-        string capMode = _capWindowSizeCheckBox?.ButtonPressed ?? false
-            ? "You can shrink the window smaller, but not grow it beyond this preset."
-            : "The window can still be resized larger or smaller unless the window manager blocks it.";
         string fitNote = fittedSize == size
             ? string.Empty
             : $" Requested {size.X} x {size.Y}, fitted to usable screen as {fittedSize.X} x {fittedSize.Y}.";
-        _statusLabel.Text = $"Window set to {fittedSize.X} x {fittedSize.Y} ({orientation}). FOV remains unchanged.{fitNote} {capMode}";
+        _statusLabel.Text = $"Window set to {fittedSize.X} x {fittedSize.Y} ({orientation}).{fitNote}";
     }
 
     private void ApplyResponsiveLayout(bool force)
@@ -685,22 +743,24 @@ public partial class RangeSpikeDashboard : Control
         if (!force && shouldUsePortraitLayout == _isPortraitLayout)
             return;
 
+        // Save current tile positions before switching orientation.
+        if (!force)
+            SaveLayout();
+
         _isPortraitLayout = shouldUsePortraitLayout;
         _tileCanvas.ConfigureGrid(shouldUsePortraitLayout ? 8 : 4, shouldUsePortraitLayout ? 10 : 6);
 
         _allTileSpecs = BuildTileSpecs(shouldUsePortraitLayout);
 
-        // Initialize visible set only on first call; preserve visibility on subsequent layout changes.
-        if (_visibleTileIds.Count == 0)
+        // Add only genuinely new tile IDs as visible; preserve the user's explicit
+        // hide choices for tiles they have already seen.
+        foreach (SpikeTileSpec spec in _allTileSpecs)
         {
-            foreach (SpikeTileSpec spec in _allTileSpecs)
+            if (!_everSeenTileIds.Contains(spec.Id))
+            {
                 _visibleTileIds.Add(spec.Id);
-        }
-        else
-        {
-            // Ensure any newly added tiles (from a different orientation) are visible by default.
-            foreach (SpikeTileSpec spec in _allTileSpecs)
-                _visibleTileIds.Add(spec.Id);
+                _everSeenTileIds.Add(spec.Id);
+            }
         }
 
         RefreshTileCanvas();
@@ -728,6 +788,7 @@ public partial class RangeSpikeDashboard : Control
         foreach (string id in visibleIds)
             _visibleTileIds.Add(id);
         RefreshTileCanvas();
+        SaveLayout();
     }
 
     private void OnTileDeleteRequested(string tileId)
@@ -735,6 +796,7 @@ public partial class RangeSpikeDashboard : Control
         _visibleTileIds.Remove(tileId);
         _tileCanvas.RemoveTile(tileId);
         _statusLabel.Text = $"Tile '{tileId}' removed. Use the Tiles button to restore it.";
+        SaveLayout();
     }
 
     private void ApplyContentBase(Vector2I fittedWindowSize)
@@ -749,52 +811,71 @@ public partial class RangeSpikeDashboard : Control
         rootWindow.ContentScaleSize = portrait ? PortraitContentBase : LandscapeContentBase;
     }
 
+    // Builds the default tile layout for the given orientation, then overlays
+    // any saved positions so the user's arrangement is restored on startup.
     private List<SpikeTileSpec> BuildTileSpecs(bool portrait)
     {
-        if (!portrait)
-        {
-            // Landscape: 4 cols × 6 rows
-            return new List<SpikeTileSpec>
-            {
-                new("viewport_3d",   "3D Shot View",      0, 0, 2, 2),
-                new("top_down",      "Top-Down Flight",   2, 0, 2, 2),
-                new("side_view",     "Side Flight",       0, 2, 2, 2),
-                new("distribution",  "Shot Distribution", 2, 2, 2, 2),
-                new("stats",         "Engine Stats",      0, 4, 4, 2),
-                new("shot_sets",     "Shot Sets",         0, 6, 2, 1), // hidden by default — row 6 is beyond visible grid without resize
-                new("mode_events",   "Mode Events",       2, 6, 2, 1),
-            };
-        }
+        List<SpikeTileSpec> specs = portrait ? DefaultPortraitSpecs() : DefaultLandscapeSpecs();
 
-        // Portrait: 8 cols × 10 rows
-        return new List<SpikeTileSpec>
+        var saved = portrait ? _savedLayout.PortraitTiles : _savedLayout.LandscapeTiles;
+        foreach (var spec in specs)
         {
-            new("viewport_3d",   "3D Shot View",      0, 0, 8, 2),
-            new("top_down",      "Top-Down Flight",   0, 2, 4, 2),
-            new("side_view",     "Side Flight",       4, 2, 4, 2),
-            new("distribution",  "Shot Distribution", 0, 4, 4, 2),
-            new("stats",         "Engine Stats",      4, 4, 4, 2),
-            new("shot_sets",     "Shot Sets",         0, 6, 4, 2),
-            new("mode_events",   "Mode Events",       4, 6, 4, 2),
-        };
+            if (saved.TryGetValue(spec.Id, out var pos))
+            {
+                spec.Column     = pos[0];
+                spec.Row        = pos[1];
+                spec.ColumnSpan = pos[2];
+                spec.RowSpan    = pos[3];
+            }
+        }
+        return specs;
+    }
+
+    private static List<SpikeTileSpec> DefaultLandscapeSpecs() => new()
+    {
+        new("viewport_3d",   "3D Shot View",      0, 0, 2, 2),
+        new("top_down",      "Top-Down Flight",   2, 0, 2, 2),
+        new("side_view",     "Side Flight",       0, 2, 2, 2),
+        new("distribution",  "Shot Distribution", 2, 2, 2, 2),
+        new("stats",         "Engine Stats",      0, 4, 4, 2),
+        new("shot_sets",     "Shot Sets",         0, 6, 2, 1),
+        new("mode_events",   "Mode Events",       2, 6, 2, 1),
+    };
+
+    private static List<SpikeTileSpec> DefaultPortraitSpecs() => new()
+    {
+        new("viewport_3d",   "3D Shot View",      0, 0, 8, 2),
+        new("top_down",      "Top-Down Flight",   0, 2, 4, 2),
+        new("side_view",     "Side Flight",       4, 2, 4, 2),
+        new("distribution",  "Shot Distribution", 0, 4, 4, 2),
+        new("stats",         "Engine Stats",      4, 4, 4, 2),
+        new("shot_sets",     "Shot Sets",         0, 6, 4, 2),
+        new("mode_events",   "Mode Events",       4, 6, 4, 2),
+    };
+
+    // Captures all current layout state to disk.
+    private void SaveLayout()
+    {
+        if (_allTileSpecs == null) return;
+
+        // Record positions for the current orientation.
+        var tileDict = _isPortraitLayout ? _savedLayout.PortraitTiles : _savedLayout.LandscapeTiles;
+        tileDict.Clear();
+        foreach (var spec in _allTileSpecs)
+            tileDict[spec.Id] = new[] { spec.Column, spec.Row, spec.ColumnSpan, spec.RowSpan };
+
+        _savedLayout.VisibleTileIds   = new HashSet<string>(_visibleTileIds);
+        _savedLayout.AllKnownTileIds  = new HashSet<string>(_everSeenTileIds);
+        _savedLayout.WindowPresetIndex = _windowPresetOption?.Selected ?? 2;
+        SpikeLayoutStore.Save(_savedLayout);
     }
 
     private Dictionary<string, Control> BuildTileContentMap()
     {
-        var summaryWrapper = new VBoxContainer();
-        summaryWrapper.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        summaryWrapper.SizeFlagsVertical = SizeFlags.ExpandFill;
-        summaryWrapper.AddThemeConstantOverride("separation", 8);
-        summaryWrapper.AddChild(BuildSectionLabel("Shot Sets"));
-        summaryWrapper.AddChild(_setSummary);
-
-        var logWrapper = new VBoxContainer();
-        logWrapper.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        logWrapper.SizeFlagsVertical = SizeFlags.ExpandFill;
-        logWrapper.AddThemeConstantOverride("separation", 8);
-        logWrapper.AddChild(BuildSectionLabel("Mode Events"));
-        logWrapper.AddChild(_modeLog);
-
+        // Reuse the persistent wrapper nodes created in BuildTileContent().
+        // Do NOT create new nodes here — callers invoke this on every layout
+        // change and every tile visibility update, so creating new nodes would
+        // leak the old ones as orphaned Godot objects.
         return new Dictionary<string, Control>
         {
             { "viewport_3d", _viewportTileContent },
@@ -802,8 +883,8 @@ public partial class RangeSpikeDashboard : Control
             { "side_view", _sidePlot },
             { "distribution", _distributionPlot },
             { "stats", _statPanel },
-            { "shot_sets", summaryWrapper },
-            { "mode_events", logWrapper },
+            { "shot_sets", _summaryWrapper },
+            { "mode_events", _logWrapper },
         };
     }
 
@@ -835,17 +916,13 @@ public partial class RangeSpikeDashboard : Control
         _ = isLibgolf; // reserved for future per-engine logic
     }
 
-    private void ApplyWindowConstraints(Vector2I presetSize, bool capToPreset)
+    private void ApplyWindowConstraints(Vector2I presetSize)
     {
-        // Clear any prior max constraint first so portrait presets are not
-        // clamped by the previous landscape cap before the new size is applied.
-        DisplayServer.WindowSetMaxSize(Vector2I.Zero);
-
         Vector2I minSize = new(
             Mathf.Max(480, presetSize.X / 2),
             Mathf.Max(320, presetSize.Y / 2));
         DisplayServer.WindowSetMinSize(minSize);
-        DisplayServer.WindowSetMaxSize(capToPreset ? presetSize : Vector2I.Zero);
+        DisplayServer.WindowSetMaxSize(Vector2I.Zero); // no maximum — window is freely resizable
     }
 
     private static Vector2I FitWindowToUsableScreen(Vector2I requestedSize)

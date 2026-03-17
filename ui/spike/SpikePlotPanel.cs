@@ -52,7 +52,7 @@ public partial class SpikePlotPanel : Control
         switch (Mode)
         {
             case PlotMode.TopDown:
-                DrawTopDownView(FitRect(fullRect, (maxOffline * 2f) / maxCarry), maxCarry, maxOffline);
+                DrawTopDownView(FitRect(fullRect, (maxOffline * 2f) / maxCarry), fullRect, maxCarry, maxOffline);
                 break;
             case PlotMode.Side:
                 DrawSideView(FitRect(fullRect, maxCarry / maxHeight), maxCarry, maxHeight);
@@ -88,27 +88,33 @@ public partial class SpikePlotPanel : Control
     // Bird's-eye looking down. Screen-X = offline (Z axis, ← left, right →).
     // Screen-Y = carry (X axis, tee at bottom, target at top).
 
-    private void DrawTopDownView(Rect2 rect, float maxCarryM, float maxOfflineM)
+    private void DrawTopDownView(Rect2 rect, Rect2 tileRect, float maxCarryM, float maxOfflineM)
     {
         DrawTopDownYardageGrid(rect, maxCarryM, maxOfflineM);
 
         // Trajectory lines + landing dots for every trace.
-        RangeSpikeShotTrace lastTrace = null;
+        // Track the annotation target: prefer a highlighted (focused/last-shot) trace
+        // over a plain palette-colour trace so arrow-key navigation keeps it in sync.
+        RangeSpikeShotTrace annotationTrace = null;
         foreach (RangeSpikeShotSet shotSet in _shotSets)
         {
             foreach (RangeSpikeShotTrace trace in shotSet.Traces)
             {
                 DrawTopDownTrace(trace, rect, maxCarryM, maxOfflineM);
-                lastTrace = trace;
+                // DisplayColor != Color means navigation or new-shot highlight is active.
+                if (trace.DisplayColor != trace.Color || annotationTrace == null)
+                    annotationTrace = trace;
             }
         }
 
         // Tee marker on top of everything.
         DrawTeeMarker(rect, maxCarryM, maxOfflineM);
 
-        // Bubble annotation only on the most recently added shot.
-        if (lastTrace != null)
-            DrawLastShotBubble(lastTrace, rect, maxCarryM, maxOfflineM);
+        if (annotationTrace != null)
+        {
+            DrawLastShotBubble(annotationTrace, rect, maxCarryM, maxOfflineM);
+            DrawOfflineBanner(annotationTrace, tileRect, maxOfflineM);
+        }
     }
 
     private void DrawTopDownYardageGrid(Rect2 rect, float maxCarryM, float maxOfflineM)
@@ -210,6 +216,65 @@ public partial class SpikePlotPanel : Control
         DrawRect(bg, new Color(0.03f, 0.06f, 0.11f, 0.92f));
         DrawRect(bg, trace.DisplayColor with { A = 0.55f }, filled: false, width: 1.0f);
         DrawString(font, new Vector2(bx + PadX, by + PadY + ascent), label, fontSize: FontSize, modulate: trace.DisplayColor);
+    }
+
+    // Large offline indicator anchored to the miss-side edge of the tile.
+    // Font is scaled to fill the available side strip as generously as possible.
+    private void DrawOfflineBanner(RangeSpikeShotTrace trace, Rect2 tileRect, float maxOfflineM)
+    {
+        float offlineYd = trace.LandingPoint.Z * YardsPerMeter;
+        if (Mathf.Abs(offlineYd) < 0.4f) return; // on line — nothing to show
+
+        bool isRight = offlineYd > 0;
+        Color col    = trace.DisplayColor;
+        Font  font   = ThemeDB.FallbackFont;
+
+        // Two-line label: distance on top, direction below.
+        string distText = $"{Mathf.Abs(offlineYd):F1} yd";
+        string dirText  = isRight ? "RIGHT" : "LEFT";
+
+        // Available strip: the outer fraction of the tile on the miss side.
+        // Width budget: proportional to how much of the grid is on that side.
+        float missRatio  = Mathf.Clamp(Mathf.Abs(trace.LandingPoint.Z) / Mathf.Max(maxOfflineM, 0.01f), 0f, 1f);
+        float sideRatio  = 1f - missRatio;           // fraction of grid on the far (empty) side
+        float stripW     = Mathf.Max(tileRect.Size.X * sideRatio * 0.88f, 40f);
+        float stripH     = tileRect.Size.Y * 0.44f;  // use up to 44% of tile height
+
+        // Fit the largest integer font size where both lines stay inside the strip.
+        int fontSize = 8;
+        for (int fs = 80; fs >= 8; fs--)
+        {
+            float w1 = font.GetStringSize(distText, fontSize: fs).X;
+            float w2 = font.GetStringSize(dirText,  fontSize: fs).X;
+            float h  = (fs + 2f) * 2f;
+            if (w1 <= stripW && w2 <= stripW && h <= stripH)
+            {
+                fontSize = fs;
+                break;
+            }
+        }
+
+        float asc  = font.GetAscent(fontSize);
+        float lineH = fontSize + 2f;
+        float w1f   = font.GetStringSize(distText, fontSize: fontSize).X;
+        float w2f   = font.GetStringSize(dirText,  fontSize: fontSize).X;
+
+        // Anchor text to the miss-side edge, near the top.
+        float yTop = tileRect.Position.Y + 8f + asc;
+        float x1, x2;
+        if (isRight)
+        {
+            x1 = tileRect.End.X - w1f - 6f;
+            x2 = tileRect.End.X - w2f - 6f;
+        }
+        else
+        {
+            x1 = tileRect.Position.X + 6f;
+            x2 = tileRect.Position.X + 6f;
+        }
+
+        DrawString(font, new Vector2(x1, yTop),          distText, fontSize: fontSize, modulate: col with { A = 0.90f });
+        DrawString(font, new Vector2(x2, yTop + lineH),  dirText,  fontSize: fontSize, modulate: col with { A = 0.65f });
     }
 
     // Empty-state placeholder with faint centerline so the layout is clear.

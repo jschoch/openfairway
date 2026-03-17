@@ -10,6 +10,11 @@ public partial class SpikeTileCanvas : Control
     [Signal]
     public delegate void TileDeleteRequestedEventHandler(string tileId);
 
+    // Emitted after a drag or resize is committed successfully.
+    // Connect to trigger layout persistence.
+    [Signal]
+    public delegate void TileLayoutChangedEventHandler();
+
     private const float Gap = 12.0f;
     private const float HeaderHeight = 30.0f;
     private const float ResizeOverlaySize = 38.0f;
@@ -450,7 +455,9 @@ public partial class SpikeTileCanvas : Control
                 EmitSignal(SignalName.StatusChanged, $"{_activeTile.Title} resized to {_activeTile.ColumnSpan}x{_activeTile.RowSpan}.");
         }
 
-        if (!changed)
+        if (changed)
+            EmitSignal(SignalName.TileLayoutChanged);
+        else
             EmitSignal(SignalName.StatusChanged, reason);
 
         _activeInteraction = ActiveInteraction.None;

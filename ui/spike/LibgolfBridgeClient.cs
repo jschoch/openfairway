@@ -87,7 +87,16 @@ public sealed class LibgolfBridgeClient
             var stdoutTask = proc.StandardOutput.ReadToEndAsync();
             var stderrTask = proc.StandardError.ReadToEndAsync();
             Task.WaitAll(stdoutTask, stderrTask);
-            proc.WaitForExit();
+
+            // 8-second hard timeout — a normal shot takes < 1 s.
+            // Kill if the bridge hangs (e.g. isComplete() loops forever).
+            if (!proc.WaitForExit(8000))
+            {
+                proc.Kill();
+                proc.WaitForExit();
+                GD.PrintErr("[LibgolfBridge] Bridge process timed out and was killed.");
+                return null;
+            }
 
             stdout = stdoutTask.Result;
             stderr = stderrTask.Result;
@@ -121,7 +130,15 @@ public sealed class LibgolfBridgeClient
                 float x = pt[0].GetSingle(); // carry (m)  → our X
                 float y = pt[1].GetSingle(); // height (m) → our Y
                 float z = pt[2].GetSingle(); // offline (m)→ our Z
+                if (float.IsNaN(x) || float.IsNaN(y) || float.IsNaN(z))
+                    continue; // NaN from physics divergence — skip this point
                 points.Add(new Vector3(x, y, z));
+            }
+
+            if (points.Count < 2)
+            {
+                GD.PrintErr("[LibgolfBridge] Output contained only NaN points — simulation diverged.");
+                return null;
             }
 
             return points;
@@ -129,7 +146,8 @@ public sealed class LibgolfBridgeClient
         catch (System.Exception ex)
         {
             GD.PrintErr($"[LibgolfBridge] Failed to parse output: {ex.Message}");
-            GD.PrintErr($"[LibgolfBridge] Raw output: {json}");
+            string preview = json.Length > 200 ? json[..200] + $"… ({json.Length} chars total)" : json;
+            GD.PrintErr($"[LibgolfBridge] Raw output: {preview}");
             return null;
         }
     }
