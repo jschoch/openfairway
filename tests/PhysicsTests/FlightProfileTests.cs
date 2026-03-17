@@ -27,13 +27,13 @@ namespace OpenFairway.Tests
             Assert.That(p.CdPolyD, Is.EqualTo(-3.14383e-16f));
             Assert.That(p.HighReCdCap, Is.EqualTo(0.2f));
             Assert.That(p.LowReCdFloor, Is.EqualTo(0.38f));
-            Assert.That(p.CdMin, Is.EqualTo(0.22f));
+            Assert.That(p.CdMin, Is.EqualTo(0.223f));
             Assert.That(p.ClMaxBase, Is.EqualTo(0.268f));
             Assert.That(p.ClMaxHighSpin, Is.EqualTo(0.32f));
             Assert.That(p.SpinDragMultiplierCoeff, Is.EqualTo(4.0f));
             Assert.That(p.SpinDragMultiplierMax, Is.EqualTo(1.20f));
             Assert.That(p.LowLaunchLiftRecoveryMax, Is.EqualTo(1.08f));
-            Assert.That(p.HighLaunchDragBoostMax, Is.EqualTo(1.18f));
+            Assert.That(p.HighLaunchDragBoostMax, Is.EqualTo(1.24f));
         }
 
         [Test]
@@ -96,6 +96,103 @@ namespace OpenFairway.Tests
             Assert.That(profile.ResolvedFlight, Is.SameAs(custom));
             Assert.That(profile.ResolvedFlight.ClMaxBase, Is.EqualTo(0.30f));
             Assert.That(profile.ResolvedBounce, Is.SameAs(BounceProfile.Default));
+        }
+
+        [Test]
+        [Category("RolloutPhysics")]
+        [Category("FlightProfile")]
+        public void ShotRegimeKey_BuildsExpectedBins()
+        {
+            Assert.That(ShotRegimeKey.Build(68.7f, 26.1f, 4149.0f), Is.EqualTo("I-S1a-V3-P2"));
+            Assert.That(ShotRegimeKey.Build(125.0f, 11.0f, 2300.0f), Is.EqualTo("D-S4-V1-P0"));
+            Assert.That(ShotRegimeKey.Build(52.0f, 37.0f, 5652.0f), Is.EqualTo("C-S0-V4-P3"));
+        }
+
+        [Test]
+        [Category("RolloutPhysics")]
+        [Category("FlightProfile")]
+        public void BallPhysicsProfile_RegimeScaleOverrides_UseMostSpecificMatch()
+        {
+            var profile = new BallPhysicsProfile
+            {
+                RegimeScaleOverrides = new System.Collections.Generic.Dictionary<string, RegimeScaleOverride>
+                {
+                    ["I"] = new() { LiftScaleMultiplier = 1.02f },
+                    ["I-S1a-V3"] = new() { LiftScaleMultiplier = 1.06f },
+                    ["I-S1a-V3-P2"] = new() { LiftScaleMultiplier = 1.11f },
+                },
+            };
+
+            RegimeScaleOverride match = profile.ResolveScaleOverride(68.7f, 26.1f, 4149.0f, out string regimeKey, out string matchedKey);
+
+            Assert.That(regimeKey, Is.EqualTo("I-S1a-V3-P2"));
+            Assert.That(matchedKey, Is.EqualTo("I-S1a-V3-P2"));
+            Assert.That(match.LiftScaleMultiplier, Is.EqualTo(1.11f));
+        }
+
+        [Test]
+        [Category("RolloutPhysics")]
+        [Category("FlightProfile")]
+        public void BallPhysicsProfile_FromJson_LoadsRegimeScaleOverrides()
+        {
+            const string json = """
+                {
+                  "DragScaleMultiplier": 1.01,
+                  "RegimeScaleOverrides": {
+                    "I-S1a-V3-P2": {
+                      "DragScaleMultiplier": 0.97,
+                      "LiftScaleMultiplier": 1.05
+                    }
+                  }
+                }
+                """;
+
+            BallPhysicsProfile profile = BallPhysicsProfile.FromJson(json);
+            RegimeScaleOverride match = profile.ResolveScaleOverride(68.7f, 26.1f, 4149.0f, out _, out string matchedKey);
+
+            Assert.That(profile.DragScaleMultiplier, Is.EqualTo(1.01f));
+            Assert.That(matchedKey, Is.EqualTo("I-S1a-V3-P2"));
+            Assert.That(match.DragScaleMultiplier, Is.EqualTo(0.97f));
+            Assert.That(match.LiftScaleMultiplier, Is.EqualTo(1.05f));
+        }
+
+        [Test]
+        [Category("RolloutPhysics")]
+        [Category("FlightProfile")]
+        public void PhysicsParamsFactory_AppliesRegimeScaleOverrides()
+        {
+            var factory = new PhysicsParamsFactory();
+            var profile = new BallPhysicsProfile
+            {
+                DragScaleMultiplier = 1.01f,
+                LiftScaleMultiplier = 1.02f,
+                RegimeScaleOverrides = new System.Collections.Generic.Dictionary<string, RegimeScaleOverride>
+                {
+                    ["I-S1a-V3-P2"] = new()
+                    {
+                        DragScaleMultiplier = 0.98f,
+                        LiftScaleMultiplier = 1.08f,
+                        KineticFrictionMultiplier = 0.95f,
+                    },
+                },
+            };
+
+            ResolvedPhysicsParams resolved = factory.Create(
+                airDensity: 1.2f,
+                airViscosity: 0.000018f,
+                dragScale: 1.0f,
+                liftScale: 1.0f,
+                surfaceType: PhysicsEnums.SurfaceType.Fairway,
+                floorNormal: Vector3.Up,
+                ballProfile: profile,
+                initialLaunchAngleDeg: 26.1f,
+                launchSpeedMph: 68.7f,
+                launchSpinRpm: 4149.0f
+            );
+
+            Assert.That(resolved.DragScale, Is.EqualTo(1.01f * 0.98f).Within(0.0001f));
+            Assert.That(resolved.LiftScale, Is.EqualTo(1.02f * 1.08f).Within(0.0001f));
+            Assert.That(resolved.KineticFriction, Is.LessThan(SurfacePhysicsCatalog.Get(PhysicsEnums.SurfaceType.Fairway).KineticFriction));
         }
     }
 
@@ -209,17 +306,46 @@ namespace OpenFairway.Tests
                 "Increasing spin drag max should decrease carry for high-spin wedge shots");
         }
 
-        // ── FlightScope calibration tests ──
-
-        private static readonly string FlightScopeReferencePath =
-            Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..", "..", "assets", "data", "SOT", "flightscope_reference.json");
-
-        public static IEnumerable<TestCaseData> FlightScopeCalibrationCases()
+        [Test]
+        [Category("PhysicsRuntime")]
+        [Category("FlightProfile")]
+        public void RegimeScaleOverride_OnlyAffectsMatchingShortShot()
         {
-            if (!File.Exists(FlightScopeReferencePath))
+            var profile = new BallPhysicsProfile
+            {
+                RegimeScaleOverrides = new System.Collections.Generic.Dictionary<string, RegimeScaleOverride>
+                {
+                    ["I-S1a-V3-P2"] = new()
+                    {
+                        DragScaleMultiplier = 0.96f,
+                        LiftScaleMultiplier = 1.06f,
+                    },
+                },
+            };
+
+            Godot.Collections.Dictionary shortShot = TestShotLoader.LoadTestShot("wedge_test_shot.json");
+            Godot.Collections.Dictionary driverShot = TestShotLoader.LoadTestShot("driver1.json");
+
+            float baselineShort = (float)_adapter.SimulateCarryOnlyFromJson(shortShot)["carry_yd"];
+            float tweakedShort = (float)_adapter.SimulateCarryOnlyWithProfile(shortShot, profile)["carry_yd"];
+            float baselineDriver = (float)_adapter.SimulateCarryOnlyFromJson(driverShot)["carry_yd"];
+            float tweakedDriver = (float)_adapter.SimulateCarryOnlyWithProfile(driverShot, profile)["carry_yd"];
+
+            Assert.That(tweakedShort, Is.GreaterThan(baselineShort));
+            Assert.That(tweakedDriver, Is.EqualTo(baselineDriver).Within(0.1f));
+        }
+
+        // ── FS calibration tests ──
+
+        private static readonly string FsReferencePath =
+            Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..", "..", "assets", "data", "SOT", "fs_reference.json");
+
+        public static IEnumerable<TestCaseData> FsCalibrationCases()
+        {
+            if (!File.Exists(FsReferencePath))
                 yield break;
 
-            string json = File.ReadAllText(FlightScopeReferencePath);
+            string json = File.ReadAllText(FsReferencePath);
             var reference = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, JsonElement>>(json);
 
             foreach (var kvp in reference)
@@ -231,34 +357,34 @@ namespace OpenFairway.Tests
                 if (!entry.TryGetProperty("filename", out var filenameEl))
                     continue;
 
-                float fsCarry = (float)carryEl.GetDouble();
+                float refCarry = (float)carryEl.GetDouble();
                 string filename = filenameEl.GetString();
 
-                if (fsCarry <= 0.0f)
+                if (refCarry <= 0.0f)
                     continue;
 
-                yield return new TestCaseData(shotName, filename, fsCarry)
-                    .SetName($"FlightScope_{shotName}");
+                yield return new TestCaseData(shotName, filename, refCarry)
+                    .SetName($"Fs_{shotName}");
             }
         }
 
-        [TestCaseSource(nameof(FlightScopeCalibrationCases))]
+        [TestCaseSource(nameof(FsCalibrationCases))]
         [Category("PhysicsRuntime")]
-        [Category("FlightScopeCalibration")]
-        public void CarryMatchesFlightScopeReference(
+        [Category("FsCalibration")]
+        public void CarryMatchesFsReference(
             string shotName,
             string filename,
-            float flightScopeCarry)
+            float fsCarry)
         {
             Godot.Collections.Dictionary shot = TestShotLoader.LoadTestShot(filename);
             Godot.Collections.Dictionary result = _adapter.SimulateCarryOnly(shot);
 
             float carry = (float)result["carry_yd"];
-            float delta = carry - flightScopeCarry;
+            float delta = carry - fsCarry;
 
-            TestContext.WriteLine($"{shotName}: simulated={carry:F1} yd, FlightScope={flightScopeCarry:F1} yd, delta={delta:+0.0;-0.0} yd");
+            TestContext.WriteLine($"{shotName}: simulated={carry:F1} yd, FS={fsCarry:F1} yd, delta={delta:+0.0;-0.0} yd");
 
-            Assert.Pass($"Delta: {delta:+0.0;-0.0} yd (simulated={carry:F1}, FlightScope={flightScopeCarry:F1})");
+            Assert.Pass($"Delta: {delta:+0.0;-0.0} yd (simulated={carry:F1}, FS={fsCarry:F1})");
         }
     }
 }

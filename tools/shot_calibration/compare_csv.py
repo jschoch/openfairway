@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Compare physics CSV against FlightScope CSV and write a diff CSV.
+"""Compare physics CSV against reference CSV and write a diff CSV.
 
 Usage:
-    python tools/shot_calibration/compare_csv.py assets/data/calibration/physics.csv assets/data/calibration/flightscope.csv
-    python tools/shot_calibration/compare_csv.py assets/data/calibration/physics.csv assets/data/calibration/flightscope.csv --output /tmp/shot_diff_analysis.csv
-    python tools/shot_calibration/compare_csv.py assets/data/calibration/physics.csv assets/data/calibration/flightscope.csv --carry-exceptions assets/data/calibration/carry_exception_profile.json
+    python tools/shot_calibration/compare_csv.py assets/data/calibration/physics.csv assets/data/calibration/fs.csv
+    python tools/shot_calibration/compare_csv.py assets/data/calibration/physics.csv assets/data/calibration/fs.csv --output /tmp/shot_diff_analysis.csv
+    python tools/shot_calibration/compare_csv.py assets/data/calibration/physics.csv assets/data/calibration/fs.csv --carry-exceptions assets/data/calibration/carry_exception_profile.json
 """
 
 import argparse
@@ -12,15 +12,12 @@ import csv
 import os
 import sys
 
-from carry_exception_layer import apply_carry_exceptions, load_profile
+from carry_exception_layer import apply_carry_exceptions, build_regime_key, load_profile
 
 
 SCRIPT_DIR = os.path.dirname(__file__)
 DEFAULT_OUTPUT_PATH = os.path.normpath(
     os.path.join(SCRIPT_DIR, "..", "..", "assets", "data", "calibration", "shot_diff_analysis.csv")
-)
-DEFAULT_CARRY_EXCEPTION_PROFILE = os.path.normpath(
-    os.path.join(SCRIPT_DIR, "..", "..", "assets", "data", "calibration", "carry_exception_profile.json")
 )
 
 CARRY_PASS = 3.0
@@ -35,20 +32,28 @@ OUTPUT_FIELDS = [
     "hla_deg",
     "total_spin_rpm",
     "spin_axis_deg",
+    "launch_regime_key",
+    "carry_window",
     "physics_carry_yd",
-    "flightscope_carry_yd",
+    "fs_carry_yd",
     "diff_carry_yd",
     "physics_carry_raw_yd",
     "diff_carry_raw_yd",
     "physics_total_yd",
-    "flightscope_total_yd",
+    "fs_total_yd",
     "diff_total_yd",
     "rollout_physics_yd",
-    "rollout_flightscope_yd",
+    "rollout_fs_yd",
     "diff_rollout_yd",
     "physics_apex_ft",
-    "flightscope_apex_ft",
+    "fs_apex_ft",
     "diff_apex_ft",
+    "gsp_carry_yd",
+    "gsp_total_yd",
+    "gsp_apex_ft",
+    "diff_gsp_carry_yd",
+    "diff_gsp_total_yd",
+    "diff_gsp_apex_ft",
     "carry_exception_regime",
     "carry_exception_offset_yd",
     "carry_exception_source",
@@ -123,34 +128,50 @@ def classify_status(diff_carry, diff_total):
     return "pass"
 
 
-def build_row(shot_name, physics_row, flightscope_row):
+def classify_carry_window(carry_yd):
+    """Bucket carry distance into the same priority windows used by analysis."""
+    if carry_yd is None:
+        return ""
+    if carry_yd < 115.0:
+        return "<115"
+    if carry_yd <= 150.0:
+        return "115-150"
+    if carry_yd <= 180.0:
+        return "150-180"
+    if carry_yd <= 200.0:
+        return "180-200"
+    return ">200"
+
+
+def build_row(shot_name, physics_row, ref_row, gsp_row=None):
     speed = choose_input_value(
         physics_row.get("speed_mph"),
-        flightscope_row.get("speed_mph"),
+        ref_row.get("speed_mph"),
     )
     vla = choose_input_value(
         physics_row.get("vla_deg"),
-        flightscope_row.get("vla_deg"),
+        ref_row.get("vla_deg"),
     )
     hla = choose_input_value(
         physics_row.get("hla_deg"),
-        flightscope_row.get("hla_deg"),
+        ref_row.get("hla_deg"),
     )
     spin = choose_input_value(
         physics_row.get("total_spin_rpm"),
-        flightscope_row.get("total_spin_rpm"),
+        ref_row.get("total_spin_rpm"),
     )
     spin_axis = choose_input_value(
         physics_row.get("spin_axis_deg"),
-        flightscope_row.get("spin_axis_deg"),
+        ref_row.get("spin_axis_deg"),
     )
+    regime_key = build_regime_key(speed, vla, spin)
 
     p_carry = parse_metric(physics_row.get("carry_yd"))
-    f_carry = parse_metric(flightscope_row.get("carry_yd"))
+    f_carry = parse_metric(ref_row.get("carry_yd"))
     p_total = parse_metric(physics_row.get("total_yd"))
-    f_total = parse_metric(flightscope_row.get("total_yd"))
+    f_total = parse_metric(ref_row.get("total_yd"))
     p_apex = parse_metric(physics_row.get("apex_ft"))
-    f_apex = parse_metric(flightscope_row.get("apex_ft"))
+    f_apex = parse_metric(ref_row.get("apex_ft"))
 
     diff_carry = p_carry - f_carry if p_carry is not None and f_carry is not None else None
     diff_total = p_total - f_total if p_total is not None and f_total is not None else None
@@ -168,26 +189,47 @@ def build_row(shot_name, physics_row, flightscope_row):
         "hla_deg": fmt_decimal(hla, 1),
         "total_spin_rpm": fmt_decimal(spin, 0),
         "spin_axis_deg": fmt_decimal(spin_axis, 1),
+        "launch_regime_key": regime_key,
+        "carry_window": classify_carry_window(f_carry),
         "physics_carry_yd": fmt_decimal(p_carry, 1),
-        "flightscope_carry_yd": fmt_decimal(f_carry, 1),
+        "fs_carry_yd": fmt_decimal(f_carry, 1),
         "diff_carry_yd": fmt_decimal(diff_carry, 1),
         "physics_carry_raw_yd": fmt_decimal(p_carry, 1),
         "diff_carry_raw_yd": fmt_decimal(diff_carry, 1),
         "physics_total_yd": fmt_decimal(p_total, 1),
-        "flightscope_total_yd": fmt_decimal(f_total, 1),
+        "fs_total_yd": fmt_decimal(f_total, 1),
         "diff_total_yd": fmt_decimal(diff_total, 1),
         "rollout_physics_yd": fmt_decimal(p_rollout, 1),
-        "rollout_flightscope_yd": fmt_decimal(f_rollout, 1),
+        "rollout_fs_yd": fmt_decimal(f_rollout, 1),
         "diff_rollout_yd": fmt_decimal(diff_rollout, 1),
         "physics_apex_ft": fmt_decimal(p_apex, 1),
-        "flightscope_apex_ft": fmt_decimal(f_apex, 1),
+        "fs_apex_ft": fmt_decimal(f_apex, 1),
         "diff_apex_ft": fmt_decimal(p_apex - f_apex if p_apex is not None and f_apex is not None else None, 1),
+        "gsp_carry_yd": "",
+        "gsp_total_yd": "",
+        "gsp_apex_ft": "",
+        "diff_gsp_carry_yd": "",
+        "diff_gsp_total_yd": "",
+        "diff_gsp_apex_ft": "",
         "carry_exception_regime": "",
         "carry_exception_offset_yd": "",
         "carry_exception_source": "",
         "carry_exception_applied": "false",
         "status": status,
     }
+
+    if gsp_row is not None:
+        g_carry = parse_metric(gsp_row.get("carry_yd"))
+        g_total = parse_metric(gsp_row.get("total_yd"))
+        g_apex = parse_metric(gsp_row.get("apex_ft"))
+        row["gsp_carry_yd"] = fmt_decimal(g_carry, 1)
+        row["gsp_total_yd"] = fmt_decimal(g_total, 1)
+        row["gsp_apex_ft"] = fmt_decimal(g_apex, 1)
+        row["diff_gsp_carry_yd"] = fmt_decimal(p_carry - g_carry if p_carry is not None and g_carry is not None else None, 1)
+        row["diff_gsp_total_yd"] = fmt_decimal(p_total - g_total if p_total is not None and g_total is not None else None, 1)
+        row["diff_gsp_apex_ft"] = fmt_decimal(p_apex - g_apex if p_apex is not None and g_apex is not None else None, 1)
+
+    return row
 
 
 def write_output_csv(path, rows):
@@ -203,9 +245,9 @@ def write_output_csv(path, rows):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Compare physics CSV against FlightScope CSV")
+    parser = argparse.ArgumentParser(description="Compare physics CSV against reference CSV")
     parser.add_argument("physics_csv", help="Path to physics CSV input")
-    parser.add_argument("flightscope_csv", help="Path to FlightScope CSV input")
+    parser.add_argument("reference_csv", help="Path to reference CSV input")
     parser.add_argument(
         "--output",
         default=DEFAULT_OUTPUT_PATH,
@@ -214,12 +256,17 @@ def parse_args():
     parser.add_argument(
         "--carry-exceptions",
         default=None,
-        help="Optional path to carry exception profile JSON",
+        help="Optional path to carry exception profile JSON (explicit opt-in; default is disabled)",
     )
     parser.add_argument(
         "--no-carry-exceptions",
         action="store_true",
-        help="Disable carry exception profile loading (even if default profile exists)",
+        help="Disable carry exception profile loading",
+    )
+    parser.add_argument(
+        "--gsp-csv",
+        default=None,
+        help="Optional path to GSP reference CSV (carry, total, apex only)",
     )
     return parser.parse_args()
 
@@ -227,17 +274,21 @@ def parse_args():
 def main():
     args = parse_args()
     physics = load_csv(args.physics_csv)
-    flightscope = load_csv(args.flightscope_csv)
+    reference = load_csv(args.reference_csv)
+    gsp = load_csv(args.gsp_csv) if args.gsp_csv else {}
 
-    all_shots = sorted(set(physics.keys()) | set(flightscope.keys()))
-    rows = [build_row(shot, physics.get(shot, {}), flightscope.get(shot, {})) for shot in all_shots]
+    all_shots = sorted(set(physics.keys()) | set(reference.keys()))
+    rows = [
+        build_row(
+            shot,
+            physics.get(shot, {}),
+            reference.get(shot, {}),
+            gsp_row=gsp.get(shot) if gsp else None,
+        )
+        for shot in all_shots
+    ]
 
-    carry_profile_path = None
-    if not args.no_carry_exceptions:
-        if args.carry_exceptions:
-            carry_profile_path = os.path.normpath(args.carry_exceptions)
-        elif os.path.exists(DEFAULT_CARRY_EXCEPTION_PROFILE):
-            carry_profile_path = DEFAULT_CARRY_EXCEPTION_PROFILE
+    carry_profile_path = None if args.no_carry_exceptions else (os.path.normpath(args.carry_exceptions) if args.carry_exceptions else None)
 
     applied = 0
     if carry_profile_path:
