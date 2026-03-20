@@ -515,7 +515,7 @@ private void ConnectTcpServer()
             // Override preset palette colors so OF shots always render in the engine color,
             // matching the stat panel's ColOF legend.
             foreach (var t in set.Traces)
-                t.Color = t.DisplayColor = HitShotColorOF;
+                t.DisplayColor = HitShotColorOF;
             _shotSets.Add(set);
             AppendModeEvent($"OpenFairway: {shotCount} shots for {preset.DisplayName}.");
         }
