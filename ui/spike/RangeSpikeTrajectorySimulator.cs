@@ -152,10 +152,16 @@ public sealed class RangeSpikeTrajectorySimulator
         {
             int n = set.Traces.Count;
             totalShots += n;
-            string name = set.DisplayName;
-            if (!string.IsNullOrWhiteSpace(set.Tag) && set.Tag != set.Label)
-                name += $"  [{set.Label}]";
-            sb.AppendLine($"{name}  ({n} shot{(n == 1 ? "" : "s")})");
+            // Show tag on its own line when set, followed by original label in smaller text.
+            if (!string.IsNullOrWhiteSpace(set.Tag))
+            {
+                sb.AppendLine($"{set.Tag}  ({n})");
+                sb.AppendLine($"  {set.Label}");
+            }
+            else
+            {
+                sb.AppendLine($"{set.Label}  ({n})");
+            }
         }
 
         sb.Append($"Total: {shotSets.Count} set{(shotSets.Count == 1 ? "" : "s")}, {totalShots} shot{(totalShots == 1 ? "" : "s")}");

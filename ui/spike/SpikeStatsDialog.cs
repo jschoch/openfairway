@@ -25,6 +25,8 @@ public partial class SpikeStatsDialog : Window
 
     private readonly List<(string id, CheckBox cb)> _rows = new();
 
+    public override void _Ready() => CloseRequested += Hide;
+
     public void Populate(ISet<string> enabledIds)
     {
         foreach (Node child in GetChildren()) child.QueueFree();

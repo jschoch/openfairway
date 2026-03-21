@@ -54,6 +54,7 @@ public partial class RangeSpikeDashboard : Control
     private CtpScatterPanel _ctpScatter;
     private readonly ClosestToPinEvaluator _ctpEvaluator = new();
     private Button _ctpModeButton;
+    private Button _ctpNewSetButton;
     private Button _apexToggleButton;
     // Grid dimensions — expanded when CTP tiles are active so they stay on-screen.
     private const int LandscapeColumns = 4, LandscapeRowsBase = 6, LandscapeRowsCtp = 8;
@@ -287,6 +288,10 @@ public partial class RangeSpikeDashboard : Control
         _ctpModeButton = new Button { Text = "Mode: CTP" };
         _ctpModeButton.Pressed += OnCtpModeButtonPressed;
         _controlsFlow.AddChild(_ctpModeButton);
+
+        _ctpNewSetButton = new Button { Text = "New CTP Set", Visible = false };
+        _ctpNewSetButton.Pressed += OnNewCtpSetPressed;
+        _controlsFlow.AddChild(_ctpNewSetButton);
 
         _apexToggleButton = new Button { Text = "Apex: ft" };
         _apexToggleButton.Pressed += OnApexTogglePressed;
@@ -603,6 +608,9 @@ private void ConnectTcpServer()
     private void OnClearSetsPressed()
     {
         _shotSets.Clear();
+        // Also clear active CTP results so the scoreboard doesn't show stale data.
+        // Archived CTP sessions are preserved for comparison.
+        if (_ctpEvaluator.IsActive) _ctpEvaluator.Clear();
         AppendModeEvent("Cleared all shot sets.");
         RefreshPlots();
     }
@@ -633,10 +641,9 @@ private void ConnectTcpServer()
         _topDownPlot.SetShotSets(display);
         _sidePlot.SetShotSets(display);
         _distributionPlot.SetShotSets(display);
-        // Stat panel always shows the focused/last shot per set so arrow-key
-        // navigation and new TCP shots are immediately reflected, regardless of
-        // whether "Last Shot Only" is active in the viewport.
-        _statPanel.SetShotSets(GetStatSets());
+        // Stat panel receives the full sets for accurate per-set averages and
+        // std dev. The 3D overlay shows the focused/latest individual shot.
+        _statPanel.SetShotSets(_shotSets);
         _setSummary.Text = _simulator.BuildSummary(_shotSets);
         UpdateShotNavLabel();
         _viewport3D.SetShotDataOverlay(BuildShotDataOverlay());
@@ -1055,7 +1062,7 @@ private void ConnectTcpServer()
 
     private static RichTextLabel BuildRichText(string text)
     {
-        return new RichTextLabel
+        var label = new RichTextLabel
         {
             Text = text,
             BbcodeEnabled = false,
@@ -1064,6 +1071,8 @@ private void ConnectTcpServer()
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
+        label.AddThemeFontSizeOverride("normal_font_size", 12);
+        return label;
     }
 
     private static Label BuildSectionLabel(string text)
@@ -1113,6 +1122,7 @@ private void ConnectTcpServer()
         _everSeenTileIds.Add("ctp_scoreboard");
         _everSeenTileIds.Add("ctp_scatter");
         if (_ctpModeButton != null) _ctpModeButton.Text = "Stop CTP";
+        if (_ctpNewSetButton != null) _ctpNewSetButton.Visible = true;
         // Expand the grid so CTP tiles at row 7/8 are within the canvas bounds.
         int ctpRows = _isPortraitLayout ? PortraitRowsCtp : LandscapeRowsCtp;
         int ctpCols = _isPortraitLayout ? PortraitColumns : LandscapeColumns;
@@ -1125,6 +1135,7 @@ private void ConnectTcpServer()
     {
         _ctpEvaluator.Deactivate();
         if (_ctpModeButton != null) _ctpModeButton.Text = "Mode: CTP";
+        if (_ctpNewSetButton != null) _ctpNewSetButton.Visible = false;
 
         // Remove CTP tile specs and hide them.
         _allTileSpecs.RemoveAll(s => s.Id == "ctp_scoreboard" || s.Id == "ctp_scatter");
@@ -1141,8 +1152,16 @@ private void ConnectTcpServer()
 
     private void OnCtpResultsChanged()
     {
-        _ctpTile?.Refresh(_ctpEvaluator.Config, _ctpEvaluator.Results);
+        _ctpTile?.Refresh(_ctpEvaluator.Config, _ctpEvaluator.Results, _ctpEvaluator.ArchivedSessions);
         _ctpScatter?.Refresh(_ctpEvaluator.Config, _ctpEvaluator.Results);
+    }
+
+    private void OnNewCtpSetPressed()
+    {
+        if (!_ctpEvaluator.IsActive) return;
+        int frozenNum = _ctpEvaluator.ArchivedSessions.Count + 1;
+        _ctpEvaluator.FreezeSession($"Session {frozenNum}");
+        AppendModeEvent($"CTP session {frozenNum} saved — starting new set.");
     }
 
     // ── Set label editor ──────────────────────────────────────────────────────

@@ -2,10 +2,25 @@ using System;
 using System.Collections.Generic;
 using Godot;
 
+/// <summary>A frozen CTP session kept for comparison after FreezeSession() is called.</summary>
+public sealed class CtpSession
+{
+    public CtpSession(string label, ClosestToPinConfig config, List<ClosestToPinResult> results)
+    {
+        Label   = label;
+        Config  = config;
+        Results = results;
+    }
+    public string Label  { get; }
+    public ClosestToPinConfig Config  { get; }
+    public IReadOnlyList<ClosestToPinResult> Results { get; }
+}
+
 /// <summary>
 /// Evaluates shots against a Closest to the Pin configuration.
 ///
 /// Call Activate() to begin a session, then AddTrace() for each incoming shot.
+/// FreezeSession() archives the current results and starts a new empty session.
 /// The Results list is re-ranked after every addition.
 /// </summary>
 public sealed class ClosestToPinEvaluator
@@ -13,12 +28,15 @@ public sealed class ClosestToPinEvaluator
     private const float MetersToYards = 1f / 0.9144f;
 
     private readonly List<ClosestToPinResult> _results = new();
+    private readonly List<CtpSession> _archivedSessions = new();
 
     public event Action ResultsChanged;
 
     public bool IsActive { get; private set; }
     public ClosestToPinConfig Config { get; private set; }
     public IReadOnlyList<ClosestToPinResult> Results => _results;
+    /// <summary>Previously frozen sessions, oldest first.</summary>
+    public IReadOnlyList<CtpSession> ArchivedSessions => _archivedSessions;
 
     public void Activate(ClosestToPinConfig config)
     {
@@ -34,9 +52,32 @@ public sealed class ClosestToPinEvaluator
         ResultsChanged?.Invoke();
     }
 
+    /// <summary>Clears active session results. Archived sessions are unaffected.</summary>
     public void Clear()
     {
         _results.Clear();
+        ResultsChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Archives the current results as a named session and resets the active list.
+    /// Session count is 1-based: "Session 1", "Session 2", …
+    /// </summary>
+    public void FreezeSession(string label = null)
+    {
+        if (!IsActive || Config == null) return;
+        int num = _archivedSessions.Count + 1;
+        string sessionLabel = string.IsNullOrWhiteSpace(label) ? $"Session {num}" : label;
+        _archivedSessions.Add(new CtpSession(sessionLabel, Config, new List<ClosestToPinResult>(_results)));
+        _results.Clear();
+        ResultsChanged?.Invoke();
+    }
+
+    /// <summary>Clears the active session results AND all archived sessions.</summary>
+    public void ClearAll()
+    {
+        _results.Clear();
+        _archivedSessions.Clear();
         ResultsChanged?.Invoke();
     }
 

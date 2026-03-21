@@ -106,9 +106,10 @@ public sealed partial class SpikeStatPanel : Control
                 string unit = _apexInFeet ? "ft" : "m";
                 float ofVal = _apexInFeet ? g.HeightOF * MetersToFeet : g.HeightOF;
                 float lgVal = _apexInFeet ? g.HeightLG * MetersToFeet : g.HeightLG;
+                string ofSd = SdSuffix(g.StdDevHeightOF * (_apexInFeet ? MetersToFeet : 1f), g.TraceCountOF, "F0");
                 DrawDualRow($"Peak Height ({unit})",
-                    g.HasOF ? $"{ofVal:F1} {unit}" : null, g.HeightOF / mx, ColOF,
-                    g.HasLG  ? $"{lgVal:F1} {unit}"  : null, g.HeightLG  / mx, ColLG,
+                    g.HasOF ? $"{ofVal:F1}{ofSd} {unit}" : null, g.HeightOF / mx, ColOF,
+                    g.HasLG  ? $"{lgVal:F1} {unit}"        : null, g.HeightLG  / mx, ColLG,
                     x0, yPos, rowH, labelW, valW, barX, barMaxW);
                 yPos += rowH;
             }
@@ -126,14 +127,15 @@ public sealed partial class SpikeStatPanel : Control
             // ── Single-source launch params ────────────────────────────────────
             if (_enabled.Contains("speed") && g.Speed > 0)
             {
-                DrawSingleRow("Ball Speed", $"{g.Speed:F0} mph",
+                string speedSd = SdSuffix(g.StdDevSpeed, g.TraceCountOF, "F1");
+                DrawSingleRow("Ball Speed", $"{g.Speed:F0}{speedSd} mph",
                     x0, yPos, rowH, labelW);
                 yPos += rowH;
             }
-            if (_enabled.Contains("smash") && g.SmashFactor > 0)
+            if (_enabled.Contains("smash"))
             {
-                DrawSingleRow("Smash Factor", $"{g.SmashFactor:F2}",
-                    x0, yPos, rowH, labelW);
+                string smashVal = g.SmashFactor > 0 ? $"{g.SmashFactor:F2}" : "N/A";
+                DrawSingleRow("Smash Factor", smashVal, x0, yPos, rowH, labelW);
                 yPos += rowH;
             }
             if (_enabled.Contains("vla") && g.Vla > 0)
@@ -199,15 +201,19 @@ public sealed partial class SpikeStatPanel : Control
         if (g.HasOF)
         {
             float ty = lane == 0 ? yPos + rowH * 0.05f : yPos + rowH * 0.05f + lane * (rowH * 0.38f);
-            DrawLabel($"{g.CarryOF / 0.9144f:F0} yd", new Vector2(x0 + labelW + valW * 0, ty), 13, ColOF);
-            DrawRect(new Rect2(barX, barTop + lane * step, barMaxW * (g.CarryOF / 0.9144f) / (maxC > 0.01f ? maxC : 1f), barH), ColOF with { A = 0.8f });
+            float ofYd = g.CarryOF / 0.9144f;
+            string sdStr = SdSuffix(g.StdDevCarryOF / 0.9144f, g.TraceCountOF, "F0");
+            DrawLabel($"{ofYd:F0}{sdStr} yd", new Vector2(x0 + labelW + valW * 0, ty), 13, ColOF);
+            DrawRect(new Rect2(barX, barTop + lane * step, barMaxW * ofYd / (maxC > 0.01f ? maxC : 1f), barH), ColOF with { A = 0.8f });
             lane++;
         }
         if (g.HasLG)
         {
             float ty = lane == 0 ? yPos + rowH * 0.05f : yPos + rowH * 0.05f + lane * (rowH * 0.38f);
-            DrawLabel($"{g.CarryLG / 0.9144f:F0} yd", new Vector2(x0 + labelW + valW * 1, ty), 13, ColLG);
-            DrawRect(new Rect2(barX, barTop + lane * step, barMaxW * (g.CarryLG / 0.9144f) / (maxC > 0.01f ? maxC : 1f), barH), ColLG with { A = 0.8f });
+            float lgYd = g.CarryLG / 0.9144f;
+            string sdStr = SdSuffix(g.StdDevCarryLG / 0.9144f, g.TraceCountLG, "F0");
+            DrawLabel($"{lgYd:F0}{sdStr} yd", new Vector2(x0 + labelW + valW * 1, ty), 13, ColLG);
+            DrawRect(new Rect2(barX, barTop + lane * step, barMaxW * lgYd / (maxC > 0.01f ? maxC : 1f), barH), ColLG with { A = 0.8f });
         }
     }
 
@@ -242,6 +248,10 @@ public sealed partial class SpikeStatPanel : Control
         DrawLabel(value, new Vector2(x0 + labelW, yPos + rowH * 0.05f), 13, ColVal);
     }
 
+    // Returns " ±N" suffix when count >= 2 and sd > 0, else empty string.
+    private static string SdSuffix(float sd, int count, string fmt)
+        => count >= 2 && sd > 0.5f ? $" \u00b1{sd.ToString(fmt)}" : "";
+
     private void DrawLabel(string text, Vector2 pos, int size, Color color)
     {
         DrawString(ThemeDB.FallbackFont, pos + new Vector2(0, size), text,
@@ -273,17 +283,23 @@ public sealed partial class SpikeStatPanel : Control
     private sealed class StatGroup
     {
         public string PresetName;
-        // Carry: three sources
+        // Carry: three sources (averages)
         public float CarryLm;   // LM reported (yards already)
         public float CarryOF;   // metres
         public float CarryLG;   // metres
-        // Other computed
+        // Std dev of carry (yards) — 0 when n < 2
+        public float StdDevCarryOF, StdDevCarryLG;
+        // Other computed averages
         public float HeightOF, HeightLG;
+        public float StdDevHeightOF;        // metres
         public float OfflineOF, OfflineLG;
-        // Launch params (single-source)
-        public float Speed, Vla, Hla, Backspin, Sidespin;
+        public float StdDevOfflineOF;       // metres (absolute)
+        // Launch params (single-source, averages)
+        public float Speed, StdDevSpeed;
+        public float Vla, Hla, Backspin, Sidespin;
         public float SmashFactor; // 0 = not available
         public bool HasOF, HasLG;
+        public int TraceCountOF, TraceCountLG;
     }
 
     private List<StatGroup> BuildGroups()
@@ -302,48 +318,72 @@ public sealed partial class SpikeStatPanel : Control
                 byPreset[key] = g;
             }
 
-            float carry = 0, height = 0, offline = 0;
-            float lmCarry = 0, lmCount = 0;
-            float speed = 0, vla = 0, hla = 0, bs = 0, ss = 0;
+            int n = set.Traces.Count;
+
+            // First pass: accumulate sums and sums-of-squares for std dev.
+            float sumCarry = 0, sumCarrySq = 0;
+            float sumHeight = 0, sumHeightSq = 0;
+            float sumOffline = 0, sumOfflineSq = 0;
+            float sumSpeed = 0, sumSpeedSq = 0;
+            float lmCarry = 0; int lmCount = 0;
+            float vla = 0, hla = 0, bs = 0, ss = 0;
             float smash = 0; int smashCount = 0;
-            int n = 0;
+
             foreach (var t in set.Traces)
             {
-                carry   += t.LandingPoint.X;
-                offline += t.LandingPoint.Z;
-                speed   += t.SpeedMph;
-                vla     += t.LaunchAngleDeg;
-                hla     += t.DirectionDeg;
-                bs      += t.BackspinRpm;
-                ss      += t.SidespinRpm;
+                float carry  = t.LandingPoint.X;
+                float off    = t.LandingPoint.Z;
+                float speed  = t.SpeedMph;
+                float peak   = 0f;
+                foreach (var pt in t.Points) peak = Mathf.Max(peak, pt.Y);
+
+                sumCarry    += carry;  sumCarrySq   += carry * carry;
+                sumHeight   += peak;   sumHeightSq  += peak * peak;
+                sumOffline  += off;    sumOfflineSq += off * off;
+                sumSpeed    += speed;  sumSpeedSq   += speed * speed;
+                vla += t.LaunchAngleDeg; hla += t.DirectionDeg;
+                bs  += t.BackspinRpm;    ss  += t.SidespinRpm;
                 if (t.SmashFactor > 0) { smash += t.SmashFactor; smashCount++; }
                 if (t.LmCarryDistanceYd > 0) { lmCarry += t.LmCarryDistanceYd; lmCount++; }
-                float peak = 0f;
-                foreach (var pt in t.Points) peak = Mathf.Max(peak, pt.Y);
-                height += peak;
-                n++;
             }
-            if (n == 0) continue;
-            carry /= n; height /= n; offline /= n;
-            speed /= n; vla /= n; hla /= n; bs /= n; ss /= n;
+
+            float carry_  = sumCarry / n;
+            float height_ = sumHeight / n;
+            float off_    = sumOffline / n;
+            float speed_  = sumSpeed / n;
+            vla /= n; hla /= n; bs /= n; ss /= n;
             if (lmCount > 0) lmCarry /= lmCount;
+
+            static float Sd(float sumSq, float mean, int count) =>
+                count < 2 ? 0f : Mathf.Sqrt(Mathf.Max(0f, sumSq / count - mean * mean));
+
+            float sdCarry   = Sd(sumCarrySq,   carry_,  n);
+            float sdHeight  = Sd(sumHeightSq,  height_, n);
+            float sdOffline = Sd(sumOfflineSq, off_,    n);
+            float sdSpeed   = Sd(sumSpeedSq,   speed_,  n);
 
             if (isLG)
             {
-                Avg(ref g.CarryLG, carry, g.HasLG);
-                Avg(ref g.HeightLG, height, g.HasLG);
-                Avg(ref g.OfflineLG, offline, g.HasLG);
+                Avg(ref g.CarryLG,  carry_,  g.HasLG);
+                Avg(ref g.HeightLG, height_, g.HasLG);
+                Avg(ref g.OfflineLG, off_,   g.HasLG);
+                g.StdDevCarryLG = sdCarry;
+                g.TraceCountLG += n;
                 g.HasLG = true;
             }
             else
             {
-                Avg(ref g.CarryOF, carry, g.HasOF);
-                Avg(ref g.HeightOF, height, g.HasOF);
-                Avg(ref g.OfflineOF, offline, g.HasOF);
+                Avg(ref g.CarryOF,  carry_,  g.HasOF);
+                Avg(ref g.HeightOF, height_, g.HasOF);
+                Avg(ref g.OfflineOF, off_,   g.HasOF);
+                g.StdDevCarryOF  = sdCarry;
+                g.StdDevHeightOF = sdHeight;
+                g.StdDevOfflineOF = sdOffline;
+                g.StdDevSpeed    = sdSpeed;
                 if (lmCarry > 0) Avg(ref g.CarryLm, lmCarry, g.CarryLm > 0);
-                // Launch params: always overwrite with latest (they're the same inputs)
-                if (speed > 0) { g.Speed = speed; g.Vla = vla; g.Hla = hla; g.Backspin = bs; g.Sidespin = ss; }
+                if (speed_ > 0) { g.Speed = speed_; g.Vla = vla; g.Hla = hla; g.Backspin = bs; g.Sidespin = ss; }
                 if (smashCount > 0) g.SmashFactor = smash / smashCount;
+                g.TraceCountOF += n;
                 g.HasOF = true;
             }
         }

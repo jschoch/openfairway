@@ -52,7 +52,9 @@ public partial class SpikePlotPanel : Control
         switch (Mode)
         {
             case PlotMode.TopDown:
-                DrawTopDownView(FitRect(fullRect, (maxOffline * 2f) / maxCarry), fullRect, maxCarry, maxOffline);
+                // Fill the full tile — offline and carry scale independently so no
+                // space is wasted when shots go mostly straight.
+                DrawTopDownView(fullRect, fullRect, maxCarry, maxOffline);
                 break;
             case PlotMode.Side:
                 DrawSideView(FitRect(fullRect, maxCarry / maxHeight), maxCarry, maxHeight);

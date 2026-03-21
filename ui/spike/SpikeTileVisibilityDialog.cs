@@ -8,6 +8,8 @@ public partial class SpikeTileVisibilityDialog : Window
 
     private readonly List<(string id, string title, CheckBox cb)> _rows = new();
 
+    public override void _Ready() => CloseRequested += Hide;
+
     public void Populate(IEnumerable<(string id, string title)> tiles, ISet<string> visibleIds)
     {
         // Clear existing children except required Window children
