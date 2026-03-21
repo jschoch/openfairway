@@ -6,12 +6,24 @@ using Godot;
 //   p.Y = height (up)
 //   p.Z = lateral / offline deviation
 
+public struct ShotDataOverlay
+{
+    public bool HasData;
+    public float CarryYards;
+    public float ApexFeet;
+    public float OfflineYards;   // positive = right, negative = left
+    public bool HasCtp;
+    public float CtpDistanceYards;
+    public bool CtpIsHit;
+}
+
 public partial class Spike3DViewportTile : Control
 {
     private readonly List<RangeSpikeShotSet> _shotSets = new();
 
     private SubViewport _subViewport;
     private TextureRect _viewportTextureRect;
+    private ShotDataOverlayControl _overlayControl;
     private Camera3D _camera;
     private MeshInstance3D _gridMeshInstance;
     private MeshInstance3D _traceMeshInstance;
@@ -125,6 +137,16 @@ public partial class Spike3DViewportTile : Control
 
         _markerRoot = new Node3D { Name = "Markers" };
         world.AddChild(_markerRoot);
+
+        // Overlay must be added after TextureRect so it renders on top.
+        _overlayControl = new ShotDataOverlayControl { MouseFilter = MouseFilterEnum.Ignore };
+        _overlayControl.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        AddChild(_overlayControl);
+    }
+
+    public void SetShotDataOverlay(ShotDataOverlay overlay)
+    {
+        _overlayControl?.SetData(overlay);
     }
 
     private void RefreshScene()

@@ -14,14 +14,14 @@ public partial class SpikeStatsDialog : Window
         ("height",   "Peak Height"),
         ("offline",  "Offline"),
         ("speed",    "Ball Speed"),
+        ("smash",    "Smash Factor"),
         ("vla",      "VLA (Launch Angle)"),
         ("hla",      "HLA (Direction)"),
         ("backspin", "Backspin"),
         ("sidespin", "Sidespin"),
     };
 
-    // Default enabled set — the three stats that always made sense without launch params.
-    public static readonly string[] DefaultEnabled = { "carry", "height", "offline", "speed", "vla", "backspin" };
+    public static readonly string[] DefaultEnabled = { "carry", "height", "offline", "speed", "smash", "vla", "backspin" };
 
     private readonly List<(string id, CheckBox cb)> _rows = new();
 

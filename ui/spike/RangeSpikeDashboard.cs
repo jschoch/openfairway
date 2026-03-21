@@ -48,6 +48,16 @@ public partial class RangeSpikeDashboard : Control
     private int _liveShotCounter;
     private SpikeTileVisibilityDialog _visibilityDialog;
     private SpikeStatsDialog _statsDialog;
+    private ClosestToPinDialog _ctpDialog;
+    private SpikeSetLabelDialog _setLabelDialog;
+    private ClosestToPinTile _ctpTile;
+    private CtpScatterPanel _ctpScatter;
+    private readonly ClosestToPinEvaluator _ctpEvaluator = new();
+    private Button _ctpModeButton;
+    private Button _apexToggleButton;
+    // Grid dimensions — expanded when CTP tiles are active so they stay on-screen.
+    private const int LandscapeColumns = 4, LandscapeRowsBase = 6, LandscapeRowsCtp = 8;
+    private const int PortraitColumns  = 8, PortraitRowsBase  = 10, PortraitRowsCtp  = 12;
     private Label _shotNavLabel;
     private readonly HashSet<string> _visibleTileIds = new();
     // Tracks every tile ID ever seen across both orientations so we can
@@ -148,6 +158,16 @@ public partial class RangeSpikeDashboard : Control
         _statsDialog.StatsChanged += OnStatsChanged;
         _statsDialog.Visible = false;
         AddChild(_statsDialog);
+
+        _ctpDialog = new ClosestToPinDialog();
+        _ctpDialog.ModeConfigured += OnCtpModeConfigured;
+        _ctpDialog.Visible = false;
+        AddChild(_ctpDialog);
+
+        _setLabelDialog = new SpikeSetLabelDialog();
+        _setLabelDialog.LabelConfirmed += OnSetLabelConfirmed;
+        _setLabelDialog.Visible = false;
+        AddChild(_setLabelDialog);
     }
 
     private Control BuildToolbar()
@@ -181,14 +201,8 @@ public partial class RangeSpikeDashboard : Control
         var header = new HBoxContainer();
         toolbar.AddChild(header);
 
-        var title = new Label
-        {
-            Text = "Range Spike Sandbox",
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
-        };
-        title.AddThemeColorOverride("font_color", new Color("f7fbff"));
-        title.AddThemeFontSizeOverride("font_size", 28);
-        header.AddChild(title);
+        var spacerTitle = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        header.AddChild(spacerTitle);
 
         _windowInfoLabel = new Label();
         _windowInfoLabel.AddThemeColorOverride("font_color", new Color("90a0b2"));
@@ -225,6 +239,10 @@ public partial class RangeSpikeDashboard : Control
         Button clearSetsButton = new() { Text = "Clear Sets" };
         clearSetsButton.Pressed += OnClearSetsPressed;
         _controlsFlow.AddChild(clearSetsButton);
+
+        Button labelSetButton = new() { Text = "Label Set" };
+        labelSetButton.Pressed += OnLabelSetPressed;
+        _controlsFlow.AddChild(labelSetButton);
 
         var engineLabel = new Label { Text = "Engine:" };
         engineLabel.AddThemeColorOverride("font_color", new Color("90a0b2"));
@@ -265,6 +283,14 @@ public partial class RangeSpikeDashboard : Control
             _statsDialog.PopupCentered();
         };
         _controlsFlow.AddChild(statsButton);
+
+        _ctpModeButton = new Button { Text = "Mode: CTP" };
+        _ctpModeButton.Pressed += OnCtpModeButtonPressed;
+        _controlsFlow.AddChild(_ctpModeButton);
+
+        _apexToggleButton = new Button { Text = "Apex: ft" };
+        _apexToggleButton.Pressed += OnApexTogglePressed;
+        _controlsFlow.AddChild(_apexToggleButton);
 
         _windowPresetOption = new OptionButton();
         _windowPresetOption.AddItem("1280 x 720", 0);
@@ -397,6 +423,7 @@ private void ConnectTcpServer()
     {
         var (speed, vla, hla, backspin, sidespin) = _simulator.ExtractTcpParams(data);
         float lmCarry = data.TryGetValue("CarryDistance", out var cd) ? cd.AsSingle() : 0f;
+        float smashFactor = data.TryGetValue("SmashFactor", out var sf) ? sf.AsSingle() : 0f;
         int engineId = _engineOption.GetItemId(_engineOption.Selected);
         _liveShotCounter++;
 
@@ -409,9 +436,11 @@ private void ConnectTcpServer()
                 set.Label, set.Traces.Count + 1, "Launch Monitor", DimColorOF,
                 speed, vla, hla, backspin, sidespin);
             trace.LmCarryDistanceYd = lmCarry;
+            trace.SmashFactor = smashFactor;
             trace.DisplayColor = HitShotColorOF;
             set.Traces.Add(trace);
             SetFocusedSet(set);
+            if (_ctpEvaluator.IsActive) _ctpEvaluator.AddTrace(trace);
         }
 
         if (engineId == 1 || engineId == 2)
@@ -475,6 +504,18 @@ private void ConnectTcpServer()
         _modeLog = BuildRichText("Mode lifecycle events will show up here.");
         _setSummary = BuildRichText("No shot sets yet.");
 
+        _ctpTile = new ClosestToPinTile
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill
+        };
+        _ctpScatter = new CtpScatterPanel
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill
+        };
+        _ctpEvaluator.ResultsChanged += OnCtpResultsChanged;
+
         _summaryWrapper = new VBoxContainer();
         _summaryWrapper.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         _summaryWrapper.SizeFlagsVertical = SizeFlags.ExpandFill;
@@ -497,6 +538,8 @@ private void ConnectTcpServer()
             { "stats", _statPanel },
             { "shot_sets", _summaryWrapper },
             { "mode_events", _logWrapper },
+            { "ctp_scoreboard", _ctpTile },
+            { "ctp_scatter",    _ctpScatter },
         };
         _tileCanvas.ConfigureTiles(new List<SpikeTileSpec>(), contents);
     }
@@ -596,6 +639,47 @@ private void ConnectTcpServer()
         _statPanel.SetShotSets(GetStatSets());
         _setSummary.Text = _simulator.BuildSummary(_shotSets);
         UpdateShotNavLabel();
+        _viewport3D.SetShotDataOverlay(BuildShotDataOverlay());
+    }
+
+    private ShotDataOverlay BuildShotDataOverlay()
+    {
+        // Find the primary (OF/LM) trace — last focused or most recent shot.
+        var statSets = GetStatSets();
+        RangeSpikeShotTrace primary = null;
+        foreach (var set in statSets)
+        {
+            if (!set.Label.StartsWith("libgolf") && set.Traces.Count > 0)
+            {
+                primary = set.Traces[0];
+                break;
+            }
+        }
+        if (primary == null) return default;
+
+        float carryYd   = primary.LandingPoint.X / 0.9144f;
+        float peak      = 0f;
+        foreach (var pt in primary.Points) peak = Mathf.Max(peak, pt.Y);
+        float apexFt    = peak * ShotSetup.FEET_PER_METER;
+        float offlineYd = primary.LandingPoint.Z / 0.9144f;
+
+        var overlay = new ShotDataOverlay
+        {
+            HasData      = true,
+            CarryYards   = carryYd,
+            ApexFeet     = apexFt,
+            OfflineYards = offlineYd,
+        };
+
+        if (_ctpEvaluator.IsActive && _ctpEvaluator.Results.Count > 0)
+        {
+            var last = _ctpEvaluator.Results[_ctpEvaluator.Results.Count - 1];
+            overlay.HasCtp            = true;
+            overlay.CtpDistanceYards  = last.DistanceToTargetYards;
+            overlay.CtpIsHit          = last.IsHit;
+        }
+
+        return overlay;
     }
 
     // Always returns a single-trace projection (focused or last) per set.
@@ -657,6 +741,7 @@ private void ConnectTcpServer()
             trace.DisplayColor = HitShotColorOF;
             liveSet.Traces.Add(trace);
             SetFocusedSet(liveSet);
+            if (_ctpEvaluator.IsActive) _ctpEvaluator.AddTrace(trace);
         }
 
         if (engineId == 1 || engineId == 2)
@@ -753,7 +838,12 @@ private void ConnectTcpServer()
             SaveLayout();
 
         _isPortraitLayout = shouldUsePortraitLayout;
-        _tileCanvas.ConfigureGrid(shouldUsePortraitLayout ? 8 : 4, shouldUsePortraitLayout ? 10 : 6);
+        bool ctpActive = _ctpEvaluator.IsActive;
+        int cols = shouldUsePortraitLayout ? PortraitColumns  : LandscapeColumns;
+        int rows = shouldUsePortraitLayout
+            ? (ctpActive ? PortraitRowsCtp  : PortraitRowsBase)
+            : (ctpActive ? LandscapeRowsCtp : LandscapeRowsBase);
+        _tileCanvas.ConfigureGrid(cols, rows);
 
         _allTileSpecs = BuildTileSpecs(shouldUsePortraitLayout);
 
@@ -890,6 +980,8 @@ private void ConnectTcpServer()
             { "stats", _statPanel },
             { "shot_sets", _summaryWrapper },
             { "mode_events", _logWrapper },
+            { "ctp_scoreboard", _ctpTile },
+            { "ctp_scatter",    _ctpScatter },
         };
     }
 
@@ -980,5 +1072,107 @@ private void ConnectTcpServer()
         label.AddThemeColorOverride("font_color", new Color("c4d4e5"));
         label.AddThemeFontSizeOverride("font_size", 14);
         return label;
+    }
+
+    // ── Closest to the Pin ─────────────────────────────────────────────────────
+
+    private void OnCtpModeButtonPressed()
+    {
+        if (_ctpEvaluator.IsActive)
+            StopCtpSession();
+        else
+            _ctpDialog.OpenDialog();
+    }
+
+    private void OnCtpModeConfigured(string club, float targetYards, float winYards)
+    {
+        var config = new ClosestToPinConfig(club, targetYards, winYards);
+        _ctpEvaluator.Activate(config);
+
+        // Add CTP tile spec if not already present, then make it visible.
+        bool hasSpec = false;
+        foreach (var spec in _allTileSpecs)
+            if (spec.Id == "ctp_scoreboard") { hasSpec = true; break; }
+
+        if (!hasSpec)
+        {
+            if (_isPortraitLayout)
+            {
+                _allTileSpecs.Add(new SpikeTileSpec("ctp_scatter",    "CTP Target View",    0, 8, 4, 2));
+                _allTileSpecs.Add(new SpikeTileSpec("ctp_scoreboard", "CTP Scoreboard",     4, 8, 4, 2));
+            }
+            else
+            {
+                _allTileSpecs.Add(new SpikeTileSpec("ctp_scatter",    "CTP Target View",    0, 7, 2, 1));
+                _allTileSpecs.Add(new SpikeTileSpec("ctp_scoreboard", "CTP Scoreboard",     2, 7, 2, 1));
+            }
+        }
+
+        _visibleTileIds.Add("ctp_scoreboard");
+        _visibleTileIds.Add("ctp_scatter");
+        _everSeenTileIds.Add("ctp_scoreboard");
+        _everSeenTileIds.Add("ctp_scatter");
+        if (_ctpModeButton != null) _ctpModeButton.Text = "Stop CTP";
+        // Expand the grid so CTP tiles at row 7/8 are within the canvas bounds.
+        int ctpRows = _isPortraitLayout ? PortraitRowsCtp : LandscapeRowsCtp;
+        int ctpCols = _isPortraitLayout ? PortraitColumns : LandscapeColumns;
+        _tileCanvas.ConfigureGrid(ctpCols, ctpRows);
+        RefreshTileCanvas();
+        AppendModeEvent($"CTP session started: {club} @ {targetYards:F0} yd, win ≤ {winYards:F0} yd.");
+    }
+
+    private void StopCtpSession()
+    {
+        _ctpEvaluator.Deactivate();
+        if (_ctpModeButton != null) _ctpModeButton.Text = "Mode: CTP";
+
+        // Remove CTP tile specs and hide them.
+        _allTileSpecs.RemoveAll(s => s.Id == "ctp_scoreboard" || s.Id == "ctp_scatter");
+        _visibleTileIds.Remove("ctp_scoreboard");
+        _visibleTileIds.Remove("ctp_scatter");
+
+        // Shrink the grid back to the base size.
+        int baseRows = _isPortraitLayout ? PortraitRowsBase : LandscapeRowsBase;
+        int baseCols = _isPortraitLayout ? PortraitColumns  : LandscapeColumns;
+        _tileCanvas.ConfigureGrid(baseCols, baseRows);
+        RefreshTileCanvas();
+        AppendModeEvent("CTP session stopped. Returning to free range mode.");
+    }
+
+    private void OnCtpResultsChanged()
+    {
+        _ctpTile?.Refresh(_ctpEvaluator.Config, _ctpEvaluator.Results);
+        _ctpScatter?.Refresh(_ctpEvaluator.Config, _ctpEvaluator.Results);
+    }
+
+    // ── Set label editor ──────────────────────────────────────────────────────
+
+    private void OnLabelSetPressed()
+    {
+        if (_focusedSet == null)
+        {
+            _statusLabel.Text = "No set focused — hit a shot or add a set first.";
+            return;
+        }
+        _setLabelDialog.OpenFor(_focusedSet.DisplayName);
+    }
+
+    private void OnSetLabelConfirmed(string tag)
+    {
+        if (_focusedSet == null) return;
+        _focusedSet.Tag = tag;
+        _setSummary.Text = _simulator.BuildSummary(_shotSets);
+        AppendModeEvent($"Set labeled: \"{_focusedSet.DisplayName}\".");
+    }
+
+    // ── Apex height unit toggle ────────────────────────────────────────────────
+
+    private bool _apexInFeet = true;
+
+    private void OnApexTogglePressed()
+    {
+        _apexInFeet = !_apexInFeet;
+        _apexToggleButton.Text = _apexInFeet ? "Apex: ft" : "Apex: m";
+        _statPanel?.SetApexUnit(_apexInFeet);
     }
 }

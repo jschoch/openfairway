@@ -31,6 +31,8 @@ public sealed class RangeSpikeShotTrace
     public float SidespinRpm { get; set; }
     // Launch-monitor reported carry distance (yards). 0 if not from a real LM.
     public float LmCarryDistanceYd { get; set; }
+    // Smash factor (ball speed / club head speed) reported by the LM. 0 = not available.
+    public float SmashFactor { get; set; }
 }
 
 public sealed class RangeSpikeShotSet
@@ -45,6 +47,15 @@ public sealed class RangeSpikeShotSet
     public string Label { get; }
     public RangeSpikeShotPreset Preset { get; }
     public List<RangeSpikeShotTrace> Traces { get; }
+
+    /// <summary>
+    /// User-assigned tag for this set (e.g. "7I stock", "draw shot").
+    /// Empty means no tag — the Label is shown as-is.
+    /// </summary>
+    public string Tag { get; set; } = string.Empty;
+
+    /// <summary>Display name: tag if set, otherwise the generated label.</summary>
+    public string DisplayName => string.IsNullOrWhiteSpace(Tag) ? Label : Tag;
 }
 
 public sealed class RangeSpikeTrajectorySimulator
@@ -134,22 +145,21 @@ public sealed class RangeSpikeTrajectorySimulator
         if (shotSets == null || shotSets.Count == 0)
             return "No shot sets loaded. Add a set to compare clubs and equipment variants.";
 
-        int shotCount = 0;
-        float totalCarryYards = 0.0f;
-        float widestOfflineYards = 0.0f;
-        foreach (RangeSpikeShotSet shotSet in shotSets)
+        var sb = new System.Text.StringBuilder();
+        int totalShots = 0;
+
+        foreach (RangeSpikeShotSet set in shotSets)
         {
-            foreach (RangeSpikeShotTrace trace in shotSet.Traces)
-            {
-                shotCount++;
-                Vector3 landing = trace.LandingPoint;
-                totalCarryYards += landing.Z * YardsPerMeter;
-                widestOfflineYards = Mathf.Max(widestOfflineYards, Mathf.Abs(landing.X * YardsPerMeter));
-            }
+            int n = set.Traces.Count;
+            totalShots += n;
+            string name = set.DisplayName;
+            if (!string.IsNullOrWhiteSpace(set.Tag) && set.Tag != set.Label)
+                name += $"  [{set.Label}]";
+            sb.AppendLine($"{name}  ({n} shot{(n == 1 ? "" : "s")})");
         }
 
-        float averageCarry = shotCount == 0 ? 0.0f : totalCarryYards / shotCount;
-        return $"Sets: {shotSets.Count}\nShots: {shotCount}\nAvg carry: {averageCarry:F1} yd\nWidest offline: {widestOfflineYards:F1} yd";
+        sb.Append($"Total: {shotSets.Count} set{(shotSets.Count == 1 ? "" : "s")}, {totalShots} shot{(totalShots == 1 ? "" : "s")}");
+        return sb.ToString();
     }
 
     private List<Vector3> SimulateFlight(float speedMph, float launchAngleDeg, float launchDirectionDeg, float backspinRpm, float sidespinRpm)

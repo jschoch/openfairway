@@ -23,6 +23,8 @@ public sealed partial class SpikeStatPanel : Control
 
     private List<RangeSpikeShotSet> _sets = new();
     private HashSet<string> _enabled = new(SpikeStatsDialog.DefaultEnabled);
+    private bool _apexInFeet = true;
+    private const float MetersToFeet = ShotSetup.FEET_PER_METER;
 
     public void SetShotSets(List<RangeSpikeShotSet> sets)
     {
@@ -33,6 +35,12 @@ public sealed partial class SpikeStatPanel : Control
     public void SetEnabledStats(IEnumerable<string> ids)
     {
         _enabled = new HashSet<string>(ids);
+        QueueRedraw();
+    }
+
+    public void SetApexUnit(bool inFeet)
+    {
+        _apexInFeet = inFeet;
         QueueRedraw();
     }
 
@@ -65,7 +73,7 @@ public sealed partial class SpikeStatPanel : Control
         float innerW  = full.Size.X - padding * 2f;
         float innerH  = full.Size.Y - padding * 2f - 16f;
         int totalRows = groups.Count * (statsPerGroup + 1) + groups.Count;
-        float rowH    = Mathf.Max(14f, innerH / totalRows);
+        float rowH    = Mathf.Max(20f, innerH / totalRows);
         float x0      = full.Position.X + padding;
         float y0      = full.Position.Y + padding;
 
@@ -80,7 +88,7 @@ public sealed partial class SpikeStatPanel : Control
         foreach (var g in groups)
         {
             // Group header
-            DrawLabel(g.PresetName, new Vector2(x0, yPos), 13, new Color("c4d4e5"));
+            DrawLabel(g.PresetName, new Vector2(x0, yPos), 15, new Color("c4d4e5"));
             yPos += rowH * 1.1f;
 
             // ── Carry: three-column LM / OF / LG ──────────────────────────────
@@ -95,9 +103,12 @@ public sealed partial class SpikeStatPanel : Control
             if (_enabled.Contains("height"))
             {
                 float mx = Mathf.Max(Mathf.Max(g.HeightOF, g.HeightLG), 0.01f);
-                DrawDualRow("Peak Height",
-                    g.HasOF ? $"{g.HeightOF:F1} m" : null, g.HeightOF / mx, ColOF,
-                    g.HasLG  ? $"{g.HeightLG:F1} m"  : null, g.HeightLG  / mx, ColLG,
+                string unit = _apexInFeet ? "ft" : "m";
+                float ofVal = _apexInFeet ? g.HeightOF * MetersToFeet : g.HeightOF;
+                float lgVal = _apexInFeet ? g.HeightLG * MetersToFeet : g.HeightLG;
+                DrawDualRow($"Peak Height ({unit})",
+                    g.HasOF ? $"{ofVal:F1} {unit}" : null, g.HeightOF / mx, ColOF,
+                    g.HasLG  ? $"{lgVal:F1} {unit}"  : null, g.HeightLG  / mx, ColLG,
                     x0, yPos, rowH, labelW, valW, barX, barMaxW);
                 yPos += rowH;
             }
@@ -116,6 +127,12 @@ public sealed partial class SpikeStatPanel : Control
             if (_enabled.Contains("speed") && g.Speed > 0)
             {
                 DrawSingleRow("Ball Speed", $"{g.Speed:F0} mph",
+                    x0, yPos, rowH, labelW);
+                yPos += rowH;
+            }
+            if (_enabled.Contains("smash") && g.SmashFactor > 0)
+            {
+                DrawSingleRow("Smash Factor", $"{g.SmashFactor:F2}",
                     x0, yPos, rowH, labelW);
                 yPos += rowH;
             }
@@ -170,26 +187,26 @@ public sealed partial class SpikeStatPanel : Control
         float step = barH + 2f;
         float barTop = yPos + rowH * 0.35f;
 
-        DrawLabel("Carry", new Vector2(x0, yPos + rowH * 0.05f), 11, ColDim);
+        DrawLabel("Carry", new Vector2(x0, yPos + rowH * 0.05f), 13, ColDim);
 
         int lane = 0;
         if (g.CarryLm > 0)
         {
-            DrawLabel($"{g.CarryLm:F0} yd", new Vector2(x0 + labelW, yPos + rowH * 0.05f), 11, ColLM);
+            DrawLabel($"{g.CarryLm:F0} yd", new Vector2(x0 + labelW, yPos + rowH * 0.05f), 13, ColLM);
             DrawRect(new Rect2(barX, barTop + lane * step, barMaxW * g.CarryLm / maxC, barH), ColLM with { A = 0.8f });
             lane++;
         }
         if (g.HasOF)
         {
             float ty = lane == 0 ? yPos + rowH * 0.05f : yPos + rowH * 0.05f + lane * (rowH * 0.38f);
-            DrawLabel($"{g.CarryOF / 0.9144f:F0} yd", new Vector2(x0 + labelW + valW * 0, ty), 11, ColOF);
+            DrawLabel($"{g.CarryOF / 0.9144f:F0} yd", new Vector2(x0 + labelW + valW * 0, ty), 13, ColOF);
             DrawRect(new Rect2(barX, barTop + lane * step, barMaxW * (g.CarryOF / 0.9144f) / (maxC > 0.01f ? maxC : 1f), barH), ColOF with { A = 0.8f });
             lane++;
         }
         if (g.HasLG)
         {
             float ty = lane == 0 ? yPos + rowH * 0.05f : yPos + rowH * 0.05f + lane * (rowH * 0.38f);
-            DrawLabel($"{g.CarryLG / 0.9144f:F0} yd", new Vector2(x0 + labelW + valW * 1, ty), 11, ColLG);
+            DrawLabel($"{g.CarryLG / 0.9144f:F0} yd", new Vector2(x0 + labelW + valW * 1, ty), 13, ColLG);
             DrawRect(new Rect2(barX, barTop + lane * step, barMaxW * (g.CarryLG / 0.9144f) / (maxC > 0.01f ? maxC : 1f), barH), ColLG with { A = 0.8f });
         }
     }
@@ -204,16 +221,16 @@ public sealed partial class SpikeStatPanel : Control
         float barH  = Mathf.Max(4f, rowH * 0.25f);
         float barTop= yPos + rowH * 0.45f;
 
-        DrawLabel(label, new Vector2(x0, yPos + rowH * 0.05f), 11, ColDim);
+        DrawLabel(label, new Vector2(x0, yPos + rowH * 0.05f), 13, ColDim);
         if (valA != null)
         {
-            DrawLabel(valA, new Vector2(x0 + labelW, yPos + rowH * 0.05f), 11, colA);
+            DrawLabel(valA, new Vector2(x0 + labelW, yPos + rowH * 0.05f), 13, colA);
             DrawRect(new Rect2(barX, barTop - barH - 1f, barMaxW * Mathf.Clamp(fracA, 0f, 1f), barH), colA with { A = 0.8f });
         }
         if (valB != null)
         {
             float ty = valA != null ? yPos + rowH * 0.48f : yPos + rowH * 0.05f;
-            DrawLabel(valB, new Vector2(x0 + labelW + valW, ty), 11, colB);
+            DrawLabel(valB, new Vector2(x0 + labelW + valW, ty), 13, colB);
             DrawRect(new Rect2(barX, barTop + 1f, barMaxW * Mathf.Clamp(fracB, 0f, 1f), barH), colB with { A = 0.8f });
         }
     }
@@ -221,8 +238,8 @@ public sealed partial class SpikeStatPanel : Control
     private void DrawSingleRow(string label, string value,
         float x0, float yPos, float rowH, float labelW)
     {
-        DrawLabel(label, new Vector2(x0, yPos + rowH * 0.05f), 11, ColDim);
-        DrawLabel(value, new Vector2(x0 + labelW, yPos + rowH * 0.05f), 11, ColVal);
+        DrawLabel(label, new Vector2(x0, yPos + rowH * 0.05f), 13, ColDim);
+        DrawLabel(value, new Vector2(x0 + labelW, yPos + rowH * 0.05f), 13, ColVal);
     }
 
     private void DrawLabel(string text, Vector2 pos, int size, Color color)
@@ -248,7 +265,7 @@ public sealed partial class SpikeStatPanel : Control
     private int CountEnabled()
     {
         int n = 0;
-        string[] all = { "carry", "height", "offline", "speed", "vla", "hla", "backspin", "sidespin" };
+        string[] all = { "carry", "height", "offline", "speed", "smash", "vla", "hla", "backspin", "sidespin" };
         foreach (string s in all) if (_enabled.Contains(s)) n++;
         return n;
     }
@@ -265,6 +282,7 @@ public sealed partial class SpikeStatPanel : Control
         public float OfflineOF, OfflineLG;
         // Launch params (single-source)
         public float Speed, Vla, Hla, Backspin, Sidespin;
+        public float SmashFactor; // 0 = not available
         public bool HasOF, HasLG;
     }
 
@@ -287,6 +305,7 @@ public sealed partial class SpikeStatPanel : Control
             float carry = 0, height = 0, offline = 0;
             float lmCarry = 0, lmCount = 0;
             float speed = 0, vla = 0, hla = 0, bs = 0, ss = 0;
+            float smash = 0; int smashCount = 0;
             int n = 0;
             foreach (var t in set.Traces)
             {
@@ -297,6 +316,7 @@ public sealed partial class SpikeStatPanel : Control
                 hla     += t.DirectionDeg;
                 bs      += t.BackspinRpm;
                 ss      += t.SidespinRpm;
+                if (t.SmashFactor > 0) { smash += t.SmashFactor; smashCount++; }
                 if (t.LmCarryDistanceYd > 0) { lmCarry += t.LmCarryDistanceYd; lmCount++; }
                 float peak = 0f;
                 foreach (var pt in t.Points) peak = Mathf.Max(peak, pt.Y);
@@ -323,6 +343,7 @@ public sealed partial class SpikeStatPanel : Control
                 if (lmCarry > 0) Avg(ref g.CarryLm, lmCarry, g.CarryLm > 0);
                 // Launch params: always overwrite with latest (they're the same inputs)
                 if (speed > 0) { g.Speed = speed; g.Vla = vla; g.Hla = hla; g.Backspin = bs; g.Sidespin = ss; }
+                if (smashCount > 0) g.SmashFactor = smash / smashCount;
                 g.HasOF = true;
             }
         }
