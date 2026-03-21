@@ -21,10 +21,15 @@ public sealed partial class SpikeStatPanel : Control
     private static readonly Color ColBg  = new(0.04f, 0.07f, 0.11f, 1.0f);
     private static readonly Color ColGrid= new(0.12f, 0.18f, 0.26f, 0.6f);
 
+    private static readonly Color ColFocus = new(1.00f, 1.00f, 1.00f, 0.85f); // focused-shot tick
+
     private List<RangeSpikeShotSet> _sets = new();
     private HashSet<string> _enabled = new(SpikeStatsDialog.DefaultEnabled);
     private bool _apexInFeet = true;
     private const float MetersToFeet = ShotSetup.FEET_PER_METER;
+    // Focused / latest individual shot shown as a tick overlay on bars.
+    private RangeSpikeShotTrace _focusedTrace;
+    private string _focusedGroupKey = "";
 
     public void SetShotSets(List<RangeSpikeShotSet> sets)
     {
@@ -41,6 +46,18 @@ public sealed partial class SpikeStatPanel : Control
     public void SetApexUnit(bool inFeet)
     {
         _apexInFeet = inFeet;
+        QueueRedraw();
+    }
+
+    /// <summary>
+    /// Sets the focused/latest individual shot for bar tick overlay.
+    /// groupKey must match the preset DisplayName used as the BuildGroups() key.
+    /// Pass null trace to clear.
+    /// </summary>
+    public void SetFocusedTrace(RangeSpikeShotTrace trace, string groupKey)
+    {
+        _focusedTrace    = trace;
+        _focusedGroupKey = groupKey ?? "";
         QueueRedraw();
     }
 
@@ -87,6 +104,8 @@ public sealed partial class SpikeStatPanel : Control
 
         foreach (var g in groups)
         {
+            bool hasFocus = _focusedTrace != null && g.PresetName == _focusedGroupKey;
+
             // Group header
             DrawLabel(g.PresetName, new Vector2(x0, yPos), 15, new Color("c4d4e5"));
             yPos += rowH * 1.1f;
@@ -95,7 +114,8 @@ public sealed partial class SpikeStatPanel : Control
             if (_enabled.Contains("carry"))
             {
                 float maxC = Mathf.Max(Mathf.Max(Mathf.Max(g.CarryLm, g.CarryOF), g.CarryLG), 0.01f);
-                DrawCarryRow(g, x0, yPos, rowH, labelW, valW, barX, barMaxW, maxC);
+                float focFrac = hasFocus ? (_focusedTrace.LandingPoint.X / 0.9144f) / maxC : -1f;
+                DrawCarryRow(g, x0, yPos, rowH, labelW, valW, barX, barMaxW, maxC, focFrac);
                 yPos += rowH;
             }
 
@@ -107,20 +127,28 @@ public sealed partial class SpikeStatPanel : Control
                 float ofVal = _apexInFeet ? g.HeightOF * MetersToFeet : g.HeightOF;
                 float lgVal = _apexInFeet ? g.HeightLG * MetersToFeet : g.HeightLG;
                 string ofSd = SdSuffix(g.StdDevHeightOF * (_apexInFeet ? MetersToFeet : 1f), g.TraceCountOF, "F0");
+                float focPeak = -1f;
+                if (hasFocus && _focusedTrace.Points.Count > 0)
+                {
+                    focPeak = 0f;
+                    foreach (var pt in _focusedTrace.Points) if (pt.Y > focPeak) focPeak = pt.Y;
+                }
+                float focFrac = focPeak >= 0f ? focPeak / mx : -1f;
                 DrawDualRow($"Peak Height ({unit})",
                     g.HasOF ? $"{ofVal:F1}{ofSd} {unit}" : null, g.HeightOF / mx, ColOF,
                     g.HasLG  ? $"{lgVal:F1} {unit}"        : null, g.HeightLG  / mx, ColLG,
-                    x0, yPos, rowH, labelW, valW, barX, barMaxW);
+                    x0, yPos, rowH, labelW, valW, barX, barMaxW, focFrac);
                 yPos += rowH;
             }
 
             if (_enabled.Contains("offline"))
             {
                 float mx = Mathf.Max(Mathf.Max(Mathf.Abs(g.OfflineOF), Mathf.Abs(g.OfflineLG)), 0.01f);
+                float focFrac = hasFocus ? Mathf.Abs(_focusedTrace.LandingPoint.Z / 0.9144f) / mx : -1f;
                 DrawDualRow("Offline",
                     g.HasOF ? FormatOff(g.OfflineOF) : null, Mathf.Abs(g.OfflineOF) / mx, ColOF,
                     g.HasLG  ? FormatOff(g.OfflineLG)  : null, Mathf.Abs(g.OfflineLG)  / mx, ColLG,
-                    x0, yPos, rowH, labelW, valW, barX, barMaxW);
+                    x0, yPos, rowH, labelW, valW, barX, barMaxW, focFrac);
                 yPos += rowH;
             }
 
@@ -128,7 +156,8 @@ public sealed partial class SpikeStatPanel : Control
             if (_enabled.Contains("speed") && g.Speed > 0)
             {
                 string speedSd = SdSuffix(g.StdDevSpeed, g.TraceCountOF, "F1");
-                DrawSingleRow("Ball Speed", $"{g.Speed:F0}{speedSd} mph",
+                string nowStr  = hasFocus && _focusedTrace.SpeedMph > 0 ? $"  (now: {_focusedTrace.SpeedMph:F0})" : "";
+                DrawSingleRow("Ball Speed", $"{g.Speed:F0}{speedSd}{nowStr} mph",
                     x0, yPos, rowH, labelW);
                 yPos += rowH;
             }
@@ -183,7 +212,8 @@ public sealed partial class SpikeStatPanel : Control
 
     private void DrawCarryRow(StatGroup g,
         float x0, float yPos, float rowH,
-        float labelW, float valW, float barX, float barMaxW, float maxC)
+        float labelW, float valW, float barX, float barMaxW, float maxC,
+        float focusedFrac = -1f)
     {
         float barH = Mathf.Max(4f, rowH * 0.22f);
         float step = barH + 2f;
@@ -205,6 +235,8 @@ public sealed partial class SpikeStatPanel : Control
             string sdStr = SdSuffix(g.StdDevCarryOF / 0.9144f, g.TraceCountOF, "F0");
             DrawLabel($"{ofYd:F0}{sdStr} yd", new Vector2(x0 + labelW + valW * 0, ty), 13, ColOF);
             DrawRect(new Rect2(barX, barTop + lane * step, barMaxW * ofYd / (maxC > 0.01f ? maxC : 1f), barH), ColOF with { A = 0.8f });
+            if (focusedFrac >= 0f)
+                DrawFocusTick(barX + barMaxW * Mathf.Clamp(focusedFrac, 0f, 1f), barTop + lane * step, barH);
             lane++;
         }
         if (g.HasLG)
@@ -222,7 +254,8 @@ public sealed partial class SpikeStatPanel : Control
         string valA, float fracA, Color colA,
         string valB, float fracB, Color colB,
         float x0, float yPos, float rowH,
-        float labelW, float valW, float barX, float barMaxW)
+        float labelW, float valW, float barX, float barMaxW,
+        float focusedFrac = -1f)
     {
         float barH  = Mathf.Max(4f, rowH * 0.25f);
         float barTop= yPos + rowH * 0.45f;
@@ -232,6 +265,8 @@ public sealed partial class SpikeStatPanel : Control
         {
             DrawLabel(valA, new Vector2(x0 + labelW, yPos + rowH * 0.05f), 13, colA);
             DrawRect(new Rect2(barX, barTop - barH - 1f, barMaxW * Mathf.Clamp(fracA, 0f, 1f), barH), colA with { A = 0.8f });
+            if (focusedFrac >= 0f)
+                DrawFocusTick(barX + barMaxW * Mathf.Clamp(focusedFrac, 0f, 1f), barTop - barH - 1f, barH);
         }
         if (valB != null)
         {
@@ -246,6 +281,12 @@ public sealed partial class SpikeStatPanel : Control
     {
         DrawLabel(label, new Vector2(x0, yPos + rowH * 0.05f), 13, ColDim);
         DrawLabel(value, new Vector2(x0 + labelW, yPos + rowH * 0.05f), 13, ColVal);
+    }
+
+    // Bright vertical tick mark on top of an average bar at the focused shot's position.
+    private void DrawFocusTick(float x, float barTop, float barH)
+    {
+        DrawLine(new Vector2(x, barTop - 2f), new Vector2(x, barTop + barH + 2f), ColFocus, 1.5f);
     }
 
     // Returns " ±N" suffix when count >= 2 and sd > 0, else empty string.

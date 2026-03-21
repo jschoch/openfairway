@@ -91,6 +91,9 @@ public partial class RangeSpikeDashboard : Control
 
         // Apply saved window settings now that controls exist.
         _windowPresetOption.Select(_savedLayout.WindowPresetIndex);
+        // Restore last-used preset, clamped in case the catalog changed.
+        if (_savedLayout.LastPresetIndex > 0 && _savedLayout.LastPresetIndex < _presetOption.ItemCount)
+            _presetOption.Select(_savedLayout.LastPresetIndex);
         _tileCanvas.TileLayoutChanged += SaveLayout;
 
         ApplyResponsiveLayout(force: true);
@@ -641,9 +644,19 @@ private void ConnectTcpServer()
         _topDownPlot.SetShotSets(display);
         _sidePlot.SetShotSets(display);
         _distributionPlot.SetShotSets(display);
-        // Stat panel receives the full sets for accurate per-set averages and
-        // std dev. The 3D overlay shows the focused/latest individual shot.
+        // Stat panel receives full sets for accurate averages/std dev,
+        // plus the focused individual trace for tick-mark overlay.
         _statPanel.SetShotSets(_shotSets);
+        if (_focusedSet != null && _focusedSet.Traces.Count > 0 && !_focusedSet.Label.StartsWith("libgolf"))
+        {
+            int idx = Mathf.Clamp(_focusedTraceIndex, 0, _focusedSet.Traces.Count - 1);
+            string gkey = _focusedSet.Preset?.DisplayName ?? _focusedSet.Label;
+            _statPanel.SetFocusedTrace(_focusedSet.Traces[idx], gkey);
+        }
+        else
+        {
+            _statPanel.SetFocusedTrace(null, "");
+        }
         _setSummary.Text = _simulator.BuildSummary(_shotSets);
         UpdateShotNavLabel();
         _viewport3D.SetShotDataOverlay(BuildShotDataOverlay());
@@ -966,9 +979,10 @@ private void ConnectTcpServer()
         foreach (var spec in _allTileSpecs)
             tileDict[spec.Id] = new[] { spec.Column, spec.Row, spec.ColumnSpan, spec.RowSpan };
 
-        _savedLayout.VisibleTileIds   = new HashSet<string>(_visibleTileIds);
-        _savedLayout.AllKnownTileIds  = new HashSet<string>(_everSeenTileIds);
+        _savedLayout.VisibleTileIds    = new HashSet<string>(_visibleTileIds);
+        _savedLayout.AllKnownTileIds   = new HashSet<string>(_everSeenTileIds);
         _savedLayout.WindowPresetIndex = _windowPresetOption?.Selected ?? 2;
+        _savedLayout.LastPresetIndex   = _presetOption?.Selected ?? 0;
         SpikeLayoutStore.Save(_savedLayout);
     }
 

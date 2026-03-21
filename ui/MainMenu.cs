@@ -5,7 +5,7 @@ public partial class MainMenu : Control
     private const string LoadingScenePath = "res://ui/loading_screen.tscn";
     private const string CoursesScenePath = "res://courses/airways_fresno/hole_1/hole_1.tscn";
     private const string RangeScenePath = "res://courses/range.tscn";
-    private const string RangeSpikeScenePath = "res://ui/spike/range_spike_start.tscn";
+    private const string RangeSpikeScenePath = "res://ui/spike/range_spike_dashboard.tscn";
     private const string TcpServerServicePath = "/root/TcpServerService";
     private const string VersionSettingPath = "application/config/version";
     private const string VersionFallback = "dev";

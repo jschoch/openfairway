@@ -101,6 +101,9 @@ public sealed class RangeSpikeTrajectorySimulator
             SimulateFlight(speed, vla, hla, backspin, sidespin));
         trace.SpeedMph = speed; trace.LaunchAngleDeg = vla; trace.DirectionDeg = hla;
         trace.BackspinRpm = backspin; trace.SidespinRpm = sidespin;
+        // Compute smash factor from randomized ball speed ÷ nominal club head speed.
+        if (preset.ClubHeadSpeedMph > 0f)
+            trace.SmashFactor = speed / preset.ClubHeadSpeedMph;
         return trace;
     }
 

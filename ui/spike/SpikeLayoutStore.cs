@@ -16,6 +16,7 @@ public static class SpikeLayoutStore
     public sealed class Data
     {
         public int  WindowPresetIndex = 2;    // default 1728 × 972
+        public int  LastPresetIndex   = 0;    // last selected club/preset in the dropdown
         // Tiles the user has explicitly set visible (hidden tiles are absent).
         public HashSet<string> VisibleTileIds = new();
         // All tile IDs ever presented to the user (across both orientations).
@@ -35,6 +36,7 @@ public static class SpikeLayoutStore
         {
             ["version"]             = CurrentVersion,
             ["window_preset_index"] = data.WindowPresetIndex,
+            ["last_preset_index"]   = data.LastPresetIndex,
             ["visible_tile_ids"]    = visArr,
             ["all_known_tile_ids"]  = knownArr,
             ["landscape_tiles"]     = SerializeTiles(data.LandscapeTiles),
@@ -77,6 +79,8 @@ public static class SpikeLayoutStore
 
             if (root.TryGetValue("window_preset_index", out var pi))
                 data.WindowPresetIndex = Mathf.Clamp(pi.AsInt32(), 0, 7);
+            if (root.TryGetValue("last_preset_index", out var lpi))
+                data.LastPresetIndex = Mathf.Max(0, lpi.AsInt32());
             if (root.TryGetValue("visible_tile_ids", out var vis))
                 foreach (var v in vis.AsGodotArray()) data.VisibleTileIds.Add(v.AsString());
             if (root.TryGetValue("all_known_tile_ids", out var known))
