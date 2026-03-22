@@ -33,8 +33,8 @@ public partial class ShotDataOverlayControl : Control
 
         Font font = ThemeDB.FallbackFont;
 
-        // Scale font with tile height: 13pt baseline at ~180 px, caps at 36pt.
-        int fontSize = Mathf.Clamp((int)(Size.Y / 14f), 13, 36);
+        // Scale font with tile height: ~16pt baseline at 180 px, caps at 48pt.
+        int fontSize = Mathf.Clamp((int)(Size.Y / 10f), 16, 48);
         float rowH   = fontSize * 1.6f;
         float padX   = fontSize * 0.75f;
         float padY   = fontSize * 0.55f;

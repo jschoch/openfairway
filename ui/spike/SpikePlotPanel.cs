@@ -356,28 +356,28 @@ public partial class SpikePlotPanel : Control
             DrawLine(new Vector2(rect.Position.X, y), new Vector2(rect.End.X, y), grid, 1.0f);
         }
 
-        // Target-distance vertical line (white, dashed appearance via two-color segments).
+        foreach (RangeSpikeShotSet shotSet in _shotSets)
+            foreach (RangeSpikeShotTrace trace in shotSet.Traces)
+                DrawSideTrace(trace, rect, maxCarryM, maxHeightM);
+
+        // Target-distance vertical line drawn on top of traces.
         if (_targetDistanceYards > 0f)
         {
             float targetM = _targetDistanceYards * MetersPerYard;
             float tx = rect.Position.X + rect.Size.X * Mathf.Clamp(targetM / maxCarryM, 0f, 1f);
-            if (tx >= rect.Position.X && tx <= rect.End.X)
-            {
-                DrawLine(new Vector2(tx, rect.Position.Y), new Vector2(tx, rect.End.Y),
-                    new Color(1f, 1f, 1f, 0.55f), 1.5f);
-                // Small label above the ground line.
-                Font font = ThemeDB.FallbackFont;
-                const int LabelFs = 10;
-                string label = $"{_targetDistanceYards:F0} yd";
-                float lw = font.GetStringSize(label, fontSize: LabelFs).X;
-                DrawString(font, new Vector2(tx - lw * 0.5f, rect.End.Y - 4f - font.GetDescent(LabelFs)),
-                    label, fontSize: LabelFs, modulate: new Color(1f, 1f, 1f, 0.70f));
-            }
+            DrawLine(new Vector2(tx, rect.Position.Y), new Vector2(tx, rect.End.Y),
+                new Color(1f, 1f, 1f, 0.85f), 2f);
+            // Yardage label just above the ground line.
+            Font font = ThemeDB.FallbackFont;
+            const int LabelFs = 11;
+            string label = $"◆ {_targetDistanceYards:F0} yd";
+            float lw = font.GetStringSize(label, fontSize: LabelFs).X;
+            float ly = rect.End.Y - 4f - font.GetDescent(LabelFs) - font.GetAscent(LabelFs);
+            DrawRect(new Rect2(tx - lw * 0.5f - 3f, ly - font.GetAscent(LabelFs), lw + 6f, font.GetAscent(LabelFs) + font.GetDescent(LabelFs) + 2f),
+                new Color(0f, 0f, 0f, 0.6f));
+            DrawString(font, new Vector2(tx - lw * 0.5f, ly + font.GetAscent(LabelFs) * 0.1f),
+                label, fontSize: LabelFs, modulate: new Color(1f, 1f, 1f, 0.95f));
         }
-
-        foreach (RangeSpikeShotSet shotSet in _shotSets)
-            foreach (RangeSpikeShotTrace trace in shotSet.Traces)
-                DrawSideTrace(trace, rect, maxCarryM, maxHeightM);
     }
 
     private void DrawSideTrace(RangeSpikeShotTrace trace, Rect2 rect, float maxCarryM, float maxHeightM)

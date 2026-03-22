@@ -144,50 +144,63 @@ public sealed partial class CtpScatterPanel : Control
         foreach (var r in _results)
             if (r.ShotNumber > lastShot) lastShot = r.ShotNumber;
 
-        // Draw crosshair lines for the last shot first (behind dots).
+        // Draw crosshair lines for the last shot first (behind all dots).
         foreach (var r in _results)
         {
             if (r.ShotNumber != lastShot) continue;
             Vector2 pt = origin + new Vector2(r.OfflineYards * ppy, -r.CarryDeltaYards * ppy);
-            Color col = r.IsHit ? ColHit : ColMiss;
-            Color lineCol = col with { A = 0.45f };
-            // Horizontal line: shot → Y-axis (shows offline)
+            Color lineCol = new Color(1f, 1f, 1f, 0.35f);
+            // Horizontal line: Y-axis → shot (shows offline)
             DrawLine(new Vector2(origin.X, pt.Y), pt, lineCol, 1.0f);
-            // Vertical line: shot → X-axis (shows carry delta)
+            // Vertical line: X-axis → shot (shows carry delta)
             DrawLine(new Vector2(pt.X, origin.Y), pt, lineCol, 1.0f);
             break;
         }
 
+        // First pass: all shots except the last.
         foreach (var r in _results)
         {
-            // offline = X axis (right is positive), carry delta = Y axis (long is up → negative screen Y)
+            if (r.ShotNumber == lastShot) continue;
             Vector2 pt = origin + new Vector2(r.OfflineYards * ppy, -r.CarryDeltaYards * ppy);
-
-            bool isLast = r.ShotNumber == lastShot;
             bool isRank1 = r.Rank == 1;
             Color col = r.IsHit ? ColHit : ColMiss;
-            float radius = isLast ? 8f : (isRank1 ? 7f : 5.5f);
-
-            // Outer glow for latest shot
-            if (isLast)
-                DrawCircle(pt, radius + 3f, col with { A = 0.25f });
-
+            float radius = isRank1 ? 7f : 5.5f;
             DrawCircle(pt, radius, col);
-
-            // Dark inner so the number is readable
             DrawCircle(pt, radius - 2.5f, ColBg with { A = 0.7f });
-
-            // Shot number
             string num = r.ShotNumber.ToString();
             float tw = font.GetStringSize(num, fontSize: NumFontSize).X;
             float asc = font.GetAscent(NumFontSize);
             DrawString(font, pt + new Vector2(-tw * 0.5f, asc * 0.5f), num,
                 fontSize: NumFontSize, modulate: col);
-
-            // ★ crown for the leader (off to the upper-right of the dot)
             if (isRank1)
                 DrawString(font, pt + new Vector2(radius + 1f, -radius + 2f), "★",
                     fontSize: 9, modulate: new Color(1f, 0.82f, 0.15f));
+        }
+
+        // Second pass: last shot on top in white.
+        foreach (var r in _results)
+        {
+            // offline = X axis (right is positive), carry delta = Y axis (long is up → negative screen Y)
+            if (r.ShotNumber != lastShot) continue;
+            Vector2 pt = origin + new Vector2(r.OfflineYards * ppy, -r.CarryDeltaYards * ppy);
+            Color col = r.IsHit ? ColHit : ColMiss;
+            const float radius = 8f;
+
+            // Outer glow
+            DrawCircle(pt, radius + 4f, col with { A = 0.20f });
+            // White filled dot
+            DrawCircle(pt, radius, new Color(1f, 1f, 1f, 1f));
+            // Colored ring to show hit/miss
+            DrawArc(pt, radius + 2f, 0f, Mathf.Tau, 32, col, 2f);
+            // Dark inner
+            DrawCircle(pt, radius - 3f, ColBg with { A = 0.8f });
+
+            string num = r.ShotNumber.ToString();
+            float tw = font.GetStringSize(num, fontSize: NumFontSize).X;
+            float asc = font.GetAscent(NumFontSize);
+            DrawString(font, pt + new Vector2(-tw * 0.5f, asc * 0.5f), num,
+                fontSize: NumFontSize, modulate: new Color(1f, 1f, 1f, 1f));
+            break;
         }
     }
 

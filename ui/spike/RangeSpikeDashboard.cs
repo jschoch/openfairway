@@ -871,6 +871,30 @@ private void ConnectTcpServer()
 
         _allTileSpecs = BuildTileSpecs(shouldUsePortraitLayout);
 
+        // Re-add CTP tile specs if a session is running (BuildTileSpecs only returns base specs).
+        if (ctpActive)
+        {
+            bool hasScatter = false;
+            foreach (var s in _allTileSpecs) if (s.Id == "ctp_scatter") { hasScatter = true; break; }
+            if (!hasScatter)
+            {
+                if (shouldUsePortraitLayout)
+                {
+                    _allTileSpecs.Add(new SpikeTileSpec("ctp_scatter",    "CTP Target View", 0, 8, 4, 2));
+                    _allTileSpecs.Add(new SpikeTileSpec("ctp_scoreboard", "CTP Scoreboard",  4, 8, 4, 2));
+                }
+                else
+                {
+                    _allTileSpecs.Add(new SpikeTileSpec("ctp_scatter",    "CTP Target View", 0, 7, 2, 1));
+                    _allTileSpecs.Add(new SpikeTileSpec("ctp_scoreboard", "CTP Scoreboard",  2, 7, 2, 1));
+                }
+            }
+        }
+
+        // Keep button text in sync with evaluator state in case resize occurred while active.
+        if (_ctpModeButton != null)
+            _ctpModeButton.Text = ctpActive ? "Stop CTP" : "Mode: CTP";
+
         // Add only genuinely new tile IDs as visible; preserve the user's explicit
         // hide choices for tiles they have already seen.
         foreach (SpikeTileSpec spec in _allTileSpecs)
@@ -1146,6 +1170,7 @@ private void ConnectTcpServer()
         int ctpCols = _isPortraitLayout ? PortraitColumns : LandscapeColumns;
         _tileCanvas.ConfigureGrid(ctpCols, ctpRows);
         RefreshTileCanvas();
+        RefreshPlots();
         AppendModeEvent($"CTP session started: {club} @ {targetYards:F0} yd, win ≤ {winYards:F0} yd.");
     }
 
