@@ -19,9 +19,16 @@ public partial class SpikePlotPanel : Control
     private const float YardsPerMeter = 1.09361f;
 
     private readonly List<RangeSpikeShotSet> _shotSets = new();
+    private float _targetDistanceYards = 0f;  // 0 = no target active
 
     [Export]
     public PlotMode Mode { get; set; } = PlotMode.TopDown;
+
+    public void SetTargetDistanceYards(float yards)
+    {
+        _targetDistanceYards = yards;
+        QueueRedraw();
+    }
 
     public void SetShotSets(IEnumerable<RangeSpikeShotSet> shotSets)
     {
@@ -109,6 +116,10 @@ public partial class SpikePlotPanel : Control
             }
         }
 
+        // Target pin marker (gold) at the CTP carry distance, centered on line.
+        if (_targetDistanceYards > 0f)
+            DrawPinMarker(rect, maxCarryM, maxOfflineM);
+
         // Tee marker on top of everything.
         DrawTeeMarker(rect, maxCarryM, maxOfflineM);
 
@@ -182,6 +193,33 @@ public partial class SpikePlotPanel : Control
         DrawCircle(tee, 5.5f, new Color("1e3a52"));
         DrawCircle(tee, 3.5f, new Color("4a80a8"));
         DrawCircle(tee, 1.5f, new Color("c0dff0"));
+    }
+
+    private void DrawPinMarker(Rect2 rect, float maxCarryM, float maxOfflineM)
+    {
+        float targetM = _targetDistanceYards * MetersPerYard;
+        // Pin is on the center line (offline = 0).
+        Vector2 pinScreen = TopDownProject(new Vector3(targetM, 0f, 0f), rect, maxCarryM, maxOfflineM);
+
+        // Clamp to rect so the label is always visible even when target is beyond max carry.
+        pinScreen.Y = Mathf.Clamp(pinScreen.Y, rect.Position.Y + 6f, rect.End.Y - 6f);
+
+        // Gold crosshair / bullseye.
+        const float R = 6f;
+        Color gold = new Color("f0c040");
+        DrawCircle(pinScreen, R, gold with { A = 0.25f });
+        DrawArc(pinScreen, R, 0f, Mathf.Tau, 24, gold with { A = 0.85f }, 1.5f);
+        DrawLine(pinScreen + new Vector2(-R - 4f, 0f), pinScreen + new Vector2(R + 4f, 0f), gold with { A = 0.6f }, 1.0f);
+        DrawLine(pinScreen + new Vector2(0f, -R - 4f), pinScreen + new Vector2(0f, R + 4f), gold with { A = 0.6f }, 1.0f);
+
+        // "PIN  Nyd" label just above the marker.
+        Font font = ThemeDB.FallbackFont;
+        const int LabelFs = 10;
+        string label = $"PIN  {_targetDistanceYards:F0} yd";
+        float lw = font.GetStringSize(label, fontSize: LabelFs).X;
+        float ly = Mathf.Max(pinScreen.Y - R - 4f, rect.Position.Y + font.GetAscent(LabelFs) + 2f);
+        DrawString(font, new Vector2(pinScreen.X - lw * 0.5f, ly),
+            label, fontSize: LabelFs, modulate: gold with { A = 0.90f });
     }
 
     private void DrawLastShotBubble(RangeSpikeShotTrace trace, Rect2 rect, float maxCarryM, float maxOfflineM)
@@ -316,6 +354,25 @@ public partial class SpikePlotPanel : Control
         {
             float y = rect.Position.Y + rect.Size.Y / 4.0f * i;
             DrawLine(new Vector2(rect.Position.X, y), new Vector2(rect.End.X, y), grid, 1.0f);
+        }
+
+        // Target-distance vertical line (white, dashed appearance via two-color segments).
+        if (_targetDistanceYards > 0f)
+        {
+            float targetM = _targetDistanceYards * MetersPerYard;
+            float tx = rect.Position.X + rect.Size.X * Mathf.Clamp(targetM / maxCarryM, 0f, 1f);
+            if (tx >= rect.Position.X && tx <= rect.End.X)
+            {
+                DrawLine(new Vector2(tx, rect.Position.Y), new Vector2(tx, rect.End.Y),
+                    new Color(1f, 1f, 1f, 0.55f), 1.5f);
+                // Small label above the ground line.
+                Font font = ThemeDB.FallbackFont;
+                const int LabelFs = 10;
+                string label = $"{_targetDistanceYards:F0} yd";
+                float lw = font.GetStringSize(label, fontSize: LabelFs).X;
+                DrawString(font, new Vector2(tx - lw * 0.5f, rect.End.Y - 4f - font.GetDescent(LabelFs)),
+                    label, fontSize: LabelFs, modulate: new Color(1f, 1f, 1f, 0.70f));
+            }
         }
 
         foreach (RangeSpikeShotSet shotSet in _shotSets)

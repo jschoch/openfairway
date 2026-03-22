@@ -660,6 +660,10 @@ private void ConnectTcpServer()
         _setSummary.Text = _simulator.BuildSummary(_shotSets);
         UpdateShotNavLabel();
         _viewport3D.SetShotDataOverlay(BuildShotDataOverlay());
+
+        float targetYd = _ctpEvaluator.IsActive ? _ctpEvaluator.Config.TargetDistanceYards : 0f;
+        _topDownPlot.SetTargetDistanceYards(targetYd);
+        _sidePlot.SetTargetDistanceYards(targetYd);
     }
 
     private ShotDataOverlay BuildShotDataOverlay()

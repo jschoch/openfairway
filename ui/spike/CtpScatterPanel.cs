@@ -144,6 +144,20 @@ public sealed partial class CtpScatterPanel : Control
         foreach (var r in _results)
             if (r.ShotNumber > lastShot) lastShot = r.ShotNumber;
 
+        // Draw crosshair lines for the last shot first (behind dots).
+        foreach (var r in _results)
+        {
+            if (r.ShotNumber != lastShot) continue;
+            Vector2 pt = origin + new Vector2(r.OfflineYards * ppy, -r.CarryDeltaYards * ppy);
+            Color col = r.IsHit ? ColHit : ColMiss;
+            Color lineCol = col with { A = 0.45f };
+            // Horizontal line: shot → Y-axis (shows offline)
+            DrawLine(new Vector2(origin.X, pt.Y), pt, lineCol, 1.0f);
+            // Vertical line: shot → X-axis (shows carry delta)
+            DrawLine(new Vector2(pt.X, origin.Y), pt, lineCol, 1.0f);
+            break;
+        }
+
         foreach (var r in _results)
         {
             // offline = X axis (right is positive), carry delta = Y axis (long is up → negative screen Y)
